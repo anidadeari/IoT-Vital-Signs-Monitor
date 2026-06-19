@@ -8,7 +8,7 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <math.h>
-#include "arduino_secrets.h"
+#include "arduino_config.h"
 
 const char* WIFI_SSID = SECRET_WIFI_SSID;
 const char* WIFI_PASS = SECRET_WIFI_PASS;

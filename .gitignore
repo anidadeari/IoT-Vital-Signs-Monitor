@@ -4,6 +4,7 @@ __pycache__/
 venv/
 .env
 arduino_secrets.h
+arduino_config.h
 vitals.db
 .idea/
 .vscode/
