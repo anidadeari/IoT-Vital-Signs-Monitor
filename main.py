@@ -82,7 +82,7 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 OLLAMA_BASE_URL = os.getenv(
     "OLLAMA_BASE_URL",
-    "" if os.getenv("RAILWAY_ENVIRONMENT") else "http://localhost:11434",
+    "" if os.getenv("RENDER") else "http://localhost:11434",
 ).rstrip("/")
 
 connected_clients = []
@@ -1691,5 +1691,5 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=int(os.getenv("PORT", "8000")),
-        reload=not bool(os.getenv("RAILWAY_ENVIRONMENT")),
+        reload=not bool(os.getenv("RENDER")),
     )

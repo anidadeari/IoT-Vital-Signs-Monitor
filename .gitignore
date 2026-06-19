@@ -5,6 +5,7 @@ venv/
 .env
 arduino_secrets.h
 arduino_config.h
+esp32_vitals_fixed/arduino_config.h
 vitals.db
 .idea/
 .vscode/

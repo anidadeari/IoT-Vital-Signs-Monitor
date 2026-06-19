@@ -146,12 +146,12 @@ bool sendData() {
   WiFiClient* client = &plainClient;
 
   if (String(SERVER_URL).startsWith("https://")) {
-    // Railway uses HTTPS. For a capstone prototype, accept its managed TLS
+    // Render uses HTTPS. For a capstone prototype, accept its managed TLS
     // certificate without storing a CA certificate on the ESP32.
     secureClient.setInsecure();
     client = &secureClient;
   }
-  client->setTimeout(6);
+  client->setTimeout(25);
 
   HTTPClient http;
   if (!http.begin(*client, SERVER_URL)) {
@@ -159,8 +159,9 @@ bool sendData() {
     return false;
   }
 
-  http.setConnectTimeout(3000);
-  http.setTimeout(6000);
+  // Free Render services can need extra time after an idle spin-down.
+  http.setConnectTimeout(15000);
+  http.setTimeout(25000);
   http.addHeader("Content-Type", "application/json");
 
   int code = http.POST((uint8_t*)json, strlen(json));
