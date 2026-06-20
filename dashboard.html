@@ -600,6 +600,9 @@ let latest = {};
 let ws = null;
 let compareChartInst = null;
 let lastFreshReadingAt = 0;
+let lastReadingKey = '';
+let lastStatsRefreshAt = 0;
+let datasetRefreshTimer = null;
 const LIVE_TIMEOUT_MS = 25000;
 
 // ───── NAVIGATION ─────
@@ -843,24 +846,70 @@ function checkReadingFreshness() {
   }
 }
 
+function readingKey(d) {
+  return String(d?.id || d?.timestamp || '');
+}
+
+function readingAgeMs(d) {
+  if (d?.data_age_seconds !== undefined) {
+    return Math.max(0, Number(d.data_age_seconds || 0) * 1000);
+  }
+
+  const timestamp = String(d?.timestamp || '').replace(' ', 'T');
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? Math.max(0, Date.now() - parsed) : Infinity;
+}
+
+function validationPageIsOpen() {
+  return document.getElementById('page-validation').classList.contains('active');
+}
+
+function refreshLivePanels() {
+  const now = Date.now();
+  if (now - lastStatsRefreshAt >= 2000) {
+    lastStatsRefreshAt = now;
+    loadStats();
+  }
+
+  if (validationPageIsOpen()) {
+    clearTimeout(datasetRefreshTimer);
+    datasetRefreshTimer = setTimeout(runValidation, 250);
+  }
+}
+
+function handleReading(d, source = 'websocket') {
+  const key = readingKey(d);
+  const isNewReading = Boolean(key && key !== lastReadingKey);
+  if (isNewReading) lastReadingKey = key;
+
+  latest = d;
+  updateVitals(d, isNewReading);
+  if (isNewReading) refreshLivePanels();
+
+  const ageMs = readingAgeMs(d);
+  const isFresh = d.is_live !== undefined
+    ? d.is_live !== false
+    : ageMs <= LIVE_TIMEOUT_MS;
+  if (isFresh) {
+    pulseStreamLive = true;
+    lastFreshReadingAt = Date.now() - ageMs;
+    showConnectionState(
+      source === 'poll' ? 'Live · sync' : 'Live',
+      true,
+      new Date().toLocaleTimeString()
+    );
+  } else {
+    markEsp32Offline();
+  }
+}
+
 function wsConnect() {
   ws = new WebSocket(WS_BASE + '/ws');
   ws.onopen = () => showConnectionState('Waiting for ESP32', false);
   ws.onmessage = ({ data }) => {
     try {
       const d = JSON.parse(data);
-      latest = d;
-      const isFresh = d.is_live !== false;
-      updateVitals(d, d.stream_event === 'live');
-
-      if (isFresh) {
-        pulseStreamLive = true;
-        const ageMs = Math.max(0, Number(d.data_age_seconds || 0) * 1000);
-        lastFreshReadingAt = Date.now() - ageMs;
-        showConnectionState('Live', true, new Date().toLocaleTimeString());
-      } else {
-        markEsp32Offline();
-      }
+      handleReading(d, 'websocket');
     } catch (e) { console.error('WS:', e); }
   };
   ws.onclose = () => {
@@ -871,11 +920,11 @@ function wsConnect() {
 
 async function loadLatest(silent = false) {
   try {
-    const d = await fetch(API_BASE + '/api/latest').then(r => r.json());
+    const d = await fetch(API_BASE + '/api/latest', {
+      cache: 'no-store'
+    }).then(r => r.json());
     if (!d.message && d.status !== 'no_data') {
-      latest = d;
-      updateVitals(d, false);
-      if (d.is_live === false) markEsp32Offline();
+      handleReading(d, 'poll');
       return d;
     }
     return null;
@@ -888,7 +937,9 @@ async function loadLatest(silent = false) {
 
 async function loadStats() {
   try {
-    const s = await fetch(API_BASE + '/api/statistics').then(r => r.json());
+    const s = await fetch(API_BASE + '/api/statistics', {
+      cache: 'no-store'
+    }).then(r => r.json());
     if (s.status !== 'ok') return;
     document.getElementById('avgHr').textContent = s.averages.heart_rate ? s.averages.heart_rate + ' bpm' : '--';
     document.getElementById('avgSp').textContent = s.averages.spo2 ? s.averages.spo2 + '%' : '--';
@@ -901,7 +952,9 @@ async function loadStats() {
 async function runValidation() {
   document.getElementById('valStatus').textContent = 'Running…';
   try {
-    const v = await fetch(API_BASE + '/api/validation').then(r => r.json());
+    const v = await fetch(API_BASE + '/api/validation', {
+      cache: 'no-store'
+    }).then(r => r.json());
     if (v.status !== 'ok') {
       document.getElementById('valBody').innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--crit);padding:28px">' + esc(v.message || 'Validation failed') + '</td></tr>';
       document.getElementById('valStatus').textContent = 'Failed';
@@ -1303,6 +1356,7 @@ loadChartHistory();
 loadLatest();
 loadStats();
 setInterval(loadStats, 12000);
+setInterval(() => loadLatest(true), 1000);
 setInterval(checkReadingFreshness, 3000);
 </script>
 </body>

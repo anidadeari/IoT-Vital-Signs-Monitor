@@ -35,6 +35,16 @@ except Exception as e:
 # ==========================================================
 app = FastAPI(title="IoT Vital Signs Monitoring System")
 
+
+@app.middleware("http")
+async def disable_live_api_cache(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/") or request.url.path == "/dashboard":
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

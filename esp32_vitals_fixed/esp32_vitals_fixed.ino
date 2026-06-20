@@ -42,7 +42,13 @@ int spo2 = 0;
 // 25 samples/second when sampleAverage=4 and sampleRate=100).
 const int OXIMETER_BUFFER_SIZE = 100;
 const int OXIMETER_STEP = 25;
-const uint32_t FINGER_IR_THRESHOLD = 7000;
+// MAX30102 modules differ noticeably in LED/lens sensitivity. Use a slightly
+// lower threshold and debounce removal so one noisy sample cannot erase the
+// whole four-second calibration buffer.
+const uint32_t FINGER_IR_THRESHOLD_ON = 5000;
+const uint32_t FINGER_IR_THRESHOLD_OFF = 3500;
+const int FINGER_OFF_SAMPLES = 25;
+int fingerLowSamples = 0;
 uint32_t irBuffer[OXIMETER_BUFFER_SIZE];
 uint32_t redBuffer[OXIMETER_BUFFER_SIZE];
 int oximeterSamples = 0;
@@ -229,6 +235,7 @@ void resetOximeter() {
   lastFastBeat = 0;
   fastBpmIndex = 0;
   fastBpmCount = 0;
+  fingerLowSamples = 0;
   for (int i = 0; i < FAST_BPM_SIZE; i++) fastBpmBuffer[i] = 0;
 }
 
@@ -246,9 +253,24 @@ void processOximeter() {
     lastIR = particleSensor.getIR();
     particleSensor.nextSample();
 
-    fingerOn = lastIR >= FINGER_IR_THRESHOLD;
-    if (!fingerOn) {
+    if (!fingerOn && lastIR >= FINGER_IR_THRESHOLD_ON) {
+      fingerOn = true;
+      fingerLowSamples = 0;
+      Serial.printf("[MAX30102] Finger detected | IR=%lu\n", lastIR);
+    } else if (fingerOn && lastIR < FINGER_IR_THRESHOLD_OFF) {
+      fingerLowSamples++;
+    } else if (fingerOn) {
+      fingerLowSamples = 0;
+    }
+
+    if (fingerOn && fingerLowSamples >= FINGER_OFF_SAMPLES) {
+      fingerOn = false;
+      Serial.printf("[MAX30102] Finger removed | IR=%lu\n", lastIR);
       resetOximeter();
+      continue;
+    }
+
+    if (!fingerOn) {
       continue;
     }
 
@@ -552,13 +574,14 @@ void loop() {
   updateCardiacStatus();
   updateSpo2Status();
 
-  // Localhost refreshes every second. Render refreshes every three seconds.
+  // Localhost refreshes every second. Cloud updates are intentionally slower:
+  // HTTPS can pause the loop and starve the MAX30102 FIFO during calibration.
   bool localRetryReady = (
     localRetryAfter == 0
     || (long)(now - localRetryAfter) >= 0
   );
   bool localDue = localRetryReady && now - lastLocalSend >= 1000;
-  bool renderDue = now - lastRenderSend >= 3000;
+  bool renderDue = now - lastRenderSend >= 10000;
   if (localDue || renderDue) {
     if (localDue) lastLocalSend = now;
     if (renderDue) lastRenderSend = now;

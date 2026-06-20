@@ -9,3 +9,5 @@ esp32_vitals_fixed/arduino_config.h
 vitals.db
 .idea/
 .vscode/
+
+.docx_qa/
