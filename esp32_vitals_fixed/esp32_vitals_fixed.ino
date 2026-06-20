@@ -411,25 +411,17 @@ bool sendData(bool sendRender, bool sendLocal) {
     return false;
   }
 
-  // Render goes first so cloud updates continue when the computer is off.
+  // Send locally first for the fastest localhost dashboard update. If the
+  // computer is off, local retries are paused and Render continues alone.
   bool renderOK = !sendRender;
   bool localOK = !sendLocal;
-  if (sendRender) {
-    renderOK = postJsonToServer(
-      RENDER_SERVER_URL,
-      "RENDER",
-      json,
-      15000,
-      25000
-    );
-  }
   if (sendLocal) {
     localOK = postJsonToServer(
       LOCAL_SERVER_URL,
       "LOCAL",
       json,
-      1200,
-      1800
+      700,
+      1000
     );
 
     if (localOK) {
@@ -437,12 +429,21 @@ bool sendData(bool sendRender, bool sendLocal) {
       localRetryAfter = 0;
     } else {
       consecutiveLocalPostFailures++;
-      if (consecutiveLocalPostFailures >= 2) {
-        localRetryAfter = millis() + 30000;
+      if (consecutiveLocalPostFailures >= 1) {
+        localRetryAfter = millis() + 5000;
         consecutiveLocalPostFailures = 0;
-        Serial.println("[LOCAL] Offline; retrying in 30 seconds");
+        Serial.println("[LOCAL] Offline; retrying in 5 seconds");
       }
     }
+  }
+  if (sendRender) {
+    renderOK = postJsonToServer(
+      RENDER_SERVER_URL,
+      "RENDER",
+      json,
+      8000,
+      12000
+    );
   }
 
   if (renderOK || localOK) {
@@ -551,14 +552,13 @@ void loop() {
   updateCardiacStatus();
   updateSpo2Status();
 
-  // Prioritize sensor sampling first. The local dashboard refreshes every
-  // second; Render receives the same values every 10 seconds.
+  // Localhost refreshes every second. Render refreshes every three seconds.
   bool localRetryReady = (
     localRetryAfter == 0
     || (long)(now - localRetryAfter) >= 0
   );
   bool localDue = localRetryReady && now - lastLocalSend >= 1000;
-  bool renderDue = now - lastRenderSend >= 10000;
+  bool renderDue = now - lastRenderSend >= 3000;
   if (localDue || renderDue) {
     if (localDue) lastLocalSend = now;
     if (renderDue) lastRenderSend = now;

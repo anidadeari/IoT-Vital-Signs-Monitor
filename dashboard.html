@@ -388,7 +388,10 @@ tr:hover td{background:rgba(255,255,255,.025);}
 
   <div class="charts-grid">
     <div class="panel">
-      <div class="panel-title"><span style="--tc:#ff2d78"></span>Pulse Wave — Live · EKG-style</div>
+      <div class="panel-title">
+        <span style="--tc:#ff2d78"></span>
+        Pulse Wave — Live · <strong id="pulseBpmLabel">-- BPM</strong>
+      </div>
       <canvas id="hrC" height="120" role="img" aria-label="Animated pulse waveform based on the live heart-rate value">Animated pulse waveform based on the live heart-rate value.</canvas>
       <div class="comparison-detail">Visual pulse animation derived from MAX30102 heart rate — not a diagnostic ECG signal.</div>
     </div>
@@ -654,7 +657,13 @@ function makePulseChart() {
         },
         x: {
           grid: { color: 'rgba(255,45,120,.045)' },
-          ticks: { display: false }
+          ticks: {
+            display: true,
+            color: '#6b7db3',
+            maxTicksLimit: 6,
+            maxRotation: 0,
+            font: { family: 'JetBrains Mono', size: 9 }
+          }
         }
       }
     }
@@ -691,8 +700,16 @@ function pulseWaveSample(now) {
 
 function animatePulseWave() {
   const values = hrChart.data.datasets[0].data;
+  const labels = hrChart.data.labels;
+  const now = new Date();
   values.push(pulseWaveSample(performance.now()));
   values.shift();
+  labels.push(now.toLocaleTimeString('en', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }));
+  labels.shift();
   hrChart.update('none');
 }
 
@@ -764,6 +781,8 @@ function updateVitals(d, addToCharts = true) {
   const tp = d.temperature || 0;
   const tr = d.tremor_severity ?? 0;
   pulseBpm = hr;
+  document.getElementById('pulseBpmLabel').textContent =
+    hr > 0 ? `${hr} BPM` : '-- BPM';
 
   document.getElementById('hrV').textContent = hr || '--';
   document.getElementById('spV').textContent = sp || '--';
