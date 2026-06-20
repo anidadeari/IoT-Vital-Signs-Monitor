@@ -2,4 +2,5 @@
 
 #define SECRET_WIFI_SSID "YOUR_WIFI_NAME"
 #define SECRET_WIFI_PASS "YOUR_WIFI_PASSWORD"
-#define SECRET_SERVER_URL "https://YOUR-SERVICE-NAME.onrender.com/api/data"
+#define SECRET_RENDER_SERVER_URL "https://YOUR-SERVICE-NAME.onrender.com/api/data"
+#define SECRET_LOCAL_SERVER_URL "http://YOUR-COMPUTER-LAN-IP:8000/api/data"

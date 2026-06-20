@@ -174,13 +174,15 @@ def _comparison(
 
     if direction == "close to":
         sentence = (
-            f"The sensor value is close to the {dataset_name} dataset average."
+            f"The live ESP32 value ({sensor:.2f} {unit}) is close to the "
+            f"{dataset_name} dataset average ({reference_value:.2f} {unit})."
         )
     else:
         sentence = (
-            f"The sensor value is {abs(difference):.2f} {unit} "
-            f"({abs(difference_percent):.1f}%) {direction} the "
-            f"{dataset_name} dataset average."
+            f"The live ESP32 value is {sensor:.2f} {unit}; the "
+            f"{dataset_name} dataset average is {reference_value:.2f} {unit}. "
+            f"The exact difference is {abs(difference):.2f} {unit} "
+            f"({abs(difference_percent):.1f}%) {direction} the average."
         )
 
     return {

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VitaSense Fusion | Capstone Monitor</title>
+<title>IoT Vital Signs Monitor</title>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
@@ -67,6 +67,9 @@ nav{position:sticky;top:0;z-index:200;padding:0 32px;height:68px;display:flex;al
 .conn-badge.live{color:var(--ok);background:rgba(16,217,160,.07);border-color:rgba(16,217,160,.25);}
 .cbdot{width:7px;height:7px;border-radius:50%;background:currentColor;}
 .live .cbdot{animation:pulse-dot 1.8s ease infinite;}
+.project-footer{position:relative;z-index:1;margin:0 auto;padding:18px 32px 28px;max-width:1560px;
+  text-align:center;color:var(--muted);font-size:11px;letter-spacing:.5px;border-top:1px solid rgba(255,255,255,.06);}
+.project-footer strong{color:var(--muted2);}
 @keyframes pulse-dot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.75)}}
 
 /* PAGES */
@@ -152,6 +155,11 @@ tr:hover td{background:rgba(255,255,255,.025);}
 .prog-track{height:8px;background:rgba(255,255,255,.07);border-radius:20px;overflow:hidden;}
 .prog-fill{height:100%;border-radius:20px;background:linear-gradient(90deg,var(--ma),var(--mb));transition:width .6s cubic-bezier(.4,0,.2,1);}
 .val-grid{display:grid;grid-template-columns:1.4fr 1fr;gap:16px;margin-bottom:20px;align-items:start;}
+.val-grid>.compare-chart-wrap{grid-column:1/-1;grid-row:1;}
+.val-grid>div:last-child{display:contents;}
+.val-grid>div:last-child>.tbl-wrap{grid-column:1/-1;grid-row:2;margin-bottom:0!important;}
+.val-grid>div:last-child>.note:nth-of-type(1){grid-column:1;grid-row:3;margin-bottom:0!important;}
+.val-grid>div:last-child>.note:nth-of-type(2){grid-column:2;grid-row:3;}
 .compare-chart-wrap{background:var(--glass);border:1px solid var(--border);border-radius:22px;padding:20px;}
 
 /* AI PREDICTION PAGE */
@@ -283,7 +291,7 @@ tr:hover td{background:rgba(255,255,255,.025);}
 .alert-bar.warn{background:rgba(245,158,11,.13);border-color:rgba(245,158,11,.28);color:#fcd34d;}
 
 /* RESPONSIVE */
-@media(max-width:1200px){.vitals-row,.stats-row,.charts-grid{grid-template-columns:1fr 1fr;}.llm-grid{grid-template-columns:1fr;}.val-metrics{grid-template-columns:1fr 1fr;}.val-grid{grid-template-columns:1fr;}.signal-grid{grid-template-columns:1fr 1fr;}.bridge-grid{grid-template-columns:1fr;}.analysis-snapshot{grid-template-columns:1fr 1fr;}.snapshot-label{grid-column:1/-1;}}
+@media(max-width:1200px){.vitals-row,.stats-row,.charts-grid{grid-template-columns:1fr 1fr;}.llm-grid{grid-template-columns:1fr;}.val-metrics{grid-template-columns:1fr 1fr;}.val-grid{grid-template-columns:1fr;}.val-grid>.compare-chart-wrap,.val-grid>div:last-child>.tbl-wrap,.val-grid>div:last-child>.note:nth-of-type(1),.val-grid>div:last-child>.note:nth-of-type(2){grid-column:1;grid-row:auto;}.signal-grid{grid-template-columns:1fr 1fr;}.bridge-grid{grid-template-columns:1fr;}.analysis-snapshot{grid-template-columns:1fr 1fr;}.snapshot-label{grid-column:1/-1;}}
 @media(max-width:720px){.page{padding:18px 14px 50px;}.vitals-row,.stats-row,.signal-grid,.guidance-grid,.analysis-snapshot{grid-template-columns:1fr;}.nav-tabs{overflow-x:auto;}.ntab{padding:8px 12px;}.vc-val{font-size:40px;}.assessment-head{align-items:flex-start;flex-direction:column;}}
 </style>
 </head>
@@ -302,8 +310,8 @@ tr:hover td{background:rgba(255,255,255,.025);}
   <div class="brand">
     <div class="brand-logo">🫀</div>
     <div class="brand-text">
-      <h1><em>VitaSense</em> Fusion</h1>
-      <small>Capstone intelligence · ESP32 · datasets · 3 LLMs</small>
+      <h1><em>IoT Vital Signs</em> Monitor</h1>
+      <small>Capstone Project by Anida Deari · ESP32 · datasets · AI</small>
     </div>
   </div>
   <div class="nav-tabs">
@@ -401,33 +409,33 @@ tr:hover td{background:rgba(255,255,255,.025);}
 
   <div class="val-metrics">
     <div class="vm" style="--ma:#ff2d78;--mb:#ff6b35">
-      <div class="vm-lbl">HR Statistical Proximity</div>
+      <div class="vm-lbl">Heart Rate — Live ESP32</div>
       <div class="vm-val" id="hrSim">--</div>
-      <div class="vm-sub" id="hrQ">Run comparison to measure distance</div>
+      <div class="vm-sub" id="hrQ">Compared with BIDMC PPG and Respiration Dataset</div>
       <div class="prog-track"><div class="prog-fill" id="hrP" style="width:0%"></div></div>
     </div>
     <div class="vm" style="--ma:#00b4f0;--mb:#00e5c4">
-      <div class="vm-lbl">SpO₂ Statistical Proximity</div>
+      <div class="vm-lbl">SpO₂ — Live ESP32</div>
       <div class="vm-val" id="spSim">--</div>
-      <div class="vm-sub" id="spQ">Run comparison to measure distance</div>
+      <div class="vm-sub" id="spQ">Compared with BIDMC PPG and Respiration Dataset</div>
       <div class="prog-track"><div class="prog-fill" id="spP" style="width:0%"></div></div>
     </div>
     <div class="vm" style="--ma:#a855f7;--mb:#ec4899">
-      <div class="vm-lbl">Tremor Statistical Proximity</div>
+      <div class="vm-lbl">Tremor Amplitude — Live ESP32</div>
       <div class="vm-val" id="trSim">--</div>
-      <div class="vm-sub" id="trQ">Run comparison to measure distance</div>
+      <div class="vm-sub" id="trQ">Compared with ALAMEDA Parkinson's Disease Tremor Dataset</div>
       <div class="prog-track"><div class="prog-fill" id="trP" style="width:0%"></div></div>
     </div>
   </div>
 
   <div class="comparison-summary" id="comparisonSummary">
-    <h3>Statistical context</h3>
-    <p>Run the comparison to see a plain-language interpretation of the latest sensor reading.</p>
+    <h3>Live ESP32 Data vs Reference Datasets</h3>
+    <p>Compare the latest ESP32 measurements with the correct biomedical reference dataset.</p>
   </div>
 
   <div class="val-grid">
     <div class="compare-chart-wrap">
-      <div class="panel-title" style="margin-bottom:16px;">📊 Relative to Dataset Average (descriptive only; reference = 100%)</div>
+      <div class="panel-title" style="margin-bottom:16px;">📊 Live ESP32 Data vs Dataset Average (reference = 100%)</div>
       <div style="position:relative;width:100%;height:260px;">
         <canvas id="compareChart" role="img" aria-label="Bar chart comparing sensor readings with dataset reference values.">Sensor vs dataset reference comparison.</canvas>
       </div>
@@ -435,17 +443,17 @@ tr:hover td{background:rgba(255,255,255,.025);}
     <div>
       <div class="tbl-wrap" style="margin-bottom:16px;">
         <table>
-          <thead><tr><th>Parameter</th><th>Sensor</th><th>Reference</th><th>Comparison</th></tr></thead>
-          <tbody id="valBody"><tr><td colspan="4" style="text-align:center;color:var(--muted);padding:28px">Click Run Dataset Comparison</td></tr></tbody>
+          <thead><tr><th>Parameter</th><th>Live ESP32</th><th>Reference</th><th>Reference Dataset</th><th>Exact Comparison</th></tr></thead>
+          <tbody id="valBody"><tr><td colspan="5" style="text-align:center;color:var(--muted);padding:28px">Click Run Dataset Comparison</td></tr></tbody>
         </table>
       </div>
       <div class="note" style="margin-bottom:12px;">
-        <strong style="color:var(--muted2);">BIDMC Dataset</strong><br>
-        HR/SpO₂ averages are calculated directly from the bundled BIDMC CSV. This ICU dataset average is not a universal healthy range.
+        <strong style="color:var(--muted2);">BIDMC PPG and Respiration Dataset</strong><br>
+        Used for Heart Rate and SpO₂. Reference averages are calculated directly from the bundled BIDMC CSV.
       </div>
       <div class="note">
-        <strong style="color:var(--muted2);">ALAMEDA Dataset</strong><br>
-        Tremor average is calculated directly from the bundled ALAMEDA CSV. Comparison requires matching units and preprocessing. Temperature uses the project's 36.1–37.2°C reference range.
+        <strong style="color:var(--muted2);">ALAMEDA Parkinson's Disease Tremor Dataset</strong><br>
+        Used only for tremor amplitude. Temperature is not dataset-based; it uses the project's 36.1–37.2°C reference range.
       </div>
     </div>
   </div>
@@ -475,8 +483,8 @@ tr:hover td{background:rgba(255,255,255,.025);}
 <!-- ═══════════ AI PREDICTION ═══════════ -->
 <div class="page" id="page-prediction">
   <div class="ai-hero">
-    <h2>🧠 VitaSense <span class="grad">Fusion Analysis</span></h2>
-    <p>A presentation-ready fusion of one live ESP32 snapshot, two research datasets and three real LLMs—with a transparent winner and safety-first actions.</p>
+    <h2>🧠 <span class="grad">AI-Assisted Analysis</span></h2>
+    <p>An integrated analysis of one live ESP32 snapshot, two research datasets and three real LLMs—with a transparent winner and safety-first actions.</p>
     <button type="button" class="btn grad" id="runBtn" onclick="runAI()" style="position:relative;z-index:5;pointer-events:auto;">▶ Run AI Analysis</button>
   </div>
 
@@ -573,6 +581,10 @@ tr:hover td{background:rgba(255,255,255,.025);}
 
   <div class="note" id="smsPreview">SMS preview will appear after analysis.</div>
 </div>
+
+<footer class="project-footer">
+  IoT Vital Signs Monitoring System · Developed by <strong>Anida Deari</strong> · Capstone Project 2026
+</footer>
 
 <script>
 const API_BASE = (window.location.protocol === 'file:') ? 'http://localhost:8000' : window.location.origin;
@@ -739,47 +751,121 @@ async function runValidation() {
   try {
     const v = await fetch(API_BASE + '/api/validation').then(r => r.json());
     if (v.status !== 'ok') {
-      document.getElementById('valBody').innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--crit);padding:28px">' + esc(v.message || 'Validation failed') + '</td></tr>';
+      document.getElementById('valBody').innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--crit);padding:28px">' + esc(v.message || 'Validation failed') + '</td></tr>';
       document.getElementById('valStatus').textContent = 'Failed';
       return;
     }
     const r = v.validation_results, s = v.sensor_data, b = v.reference_datasets.bidmc, a = v.reference_datasets.alameda;
     const c = v.comparison;
 
-    // Set similarity meters
-    setMeter('hr', r.heart_rate_similarity, r.heart_rate_quality);
-    setMeter('sp', r.spo2_similarity, r.spo2_quality);
-    setMeter('tr', r.tremor_similarity, r.tremor_quality);
+    // Show the real ESP32 measurement first, then the exact reference and difference.
+    setComparisonCard(
+      'hr',
+      s.heart_rate > 0 ? `${s.heart_rate} bpm` : 'No reading',
+      `BIDMC average: ${b.hr_average} bpm`,
+      c.heart_rate
+    );
+    setComparisonCard(
+      'sp',
+      s.spo2 > 0 ? `${s.spo2}%` : 'No reading',
+      `BIDMC average: ${b.spo2_average}%`,
+      c.spo2
+    );
+    setComparisonCard(
+      'tr',
+      Number(s.tremor_amplitude).toFixed(3),
+      `ALAMEDA average: ${a.tremor_magnitude_average}`,
+      c.tremor
+    );
 
     document.getElementById('comparisonSummary').innerHTML = `
-      <h3>Statistical context</h3>
-      <p>${esc(c.heart_rate.interpretation)} ${esc(c.spo2.interpretation)}
-      ${esc(c.tremor.interpretation)} ${esc(c.temperature.interpretation)}</p>
-      <div class="comparison-detail">Calculated from ${esc(b.record_count)} BIDMC rows and ${esc(a.record_count)} ALAMEDA rows. ${esc(v.method_note)}</div>
+      <h3>What is compared?</h3>
+      <p><strong>Heart Rate:</strong> ESP32 ${esc(s.heart_rate || '--')} bpm → BIDMC average ${esc(b.hr_average)} bpm → ${esc(comparisonText(c.heart_rate))}.</p>
+      <p><strong>SpO₂:</strong> ESP32 ${esc(s.spo2 || '--')}% → BIDMC average ${esc(b.spo2_average)}% → ${esc(comparisonText(c.spo2))}.</p>
+      <p><strong>Tremor amplitude:</strong> ESP32 ${esc(s.tremor_amplitude)} → ALAMEDA average ${esc(a.tremor_magnitude_average)} → ${esc(comparisonText(c.tremor))}.</p>
+      <p><strong>Temperature:</strong> ESP32 ${esc(s.temperature)}°C → project reference 36.1–37.2°C → ${esc(c.temperature.quality)}.</p>
+      ${buildDatasetConclusion(s, r)}
+      <div class="comparison-detail">BIDMC is used only for Heart Rate and SpO₂. ALAMEDA is used only for tremor amplitude. Temperature does not use a dataset. These are descriptive comparisons, not diagnoses.</div>
     `;
 
     // Table
     document.getElementById('valBody').innerHTML = `
-      <tr><td>Heart Rate</td><td>${esc(s.heart_rate || '--')} bpm</td><td>${esc(b.hr_average)} bpm</td><td><span class="pill ${qClass(c.heart_rate.quality)}">${esc(comparisonText(c.heart_rate))}</span><div class="comparison-detail">Descriptive BIDMC comparison, not a health rating.</div></td></tr>
-      <tr><td>SpO₂</td><td>${esc(s.spo2 || '--')}%</td><td>${esc(b.spo2_average)}%</td><td><span class="pill ${qClass(c.spo2.quality)}">${esc(comparisonText(c.spo2))}</span><div class="comparison-detail">Descriptive BIDMC comparison, not a health rating.</div></td></tr>
-      <tr><td>Tremor</td><td>${esc(s.tremor_amplitude)}</td><td>${esc(a.tremor_magnitude_average)}</td><td><span class="pill ${qClass(c.tremor.quality)}">${esc(comparisonText(c.tremor))}</span><div class="comparison-detail">Lower or higher does not mean better or worse.</div></td></tr>
-      <tr><td>Temperature</td><td>${esc(s.temperature)}°C</td><td>36.1–37.2°C</td><td><span class="pill ${qClass(c.temperature.quality)}">${esc(c.temperature.quality)}</span><div class="comparison-detail">${esc(c.temperature.interpretation)}</div></td></tr>
+      <tr><td>Heart Rate</td><td>${esc(s.heart_rate || '--')} bpm</td><td>${esc(b.hr_average)} bpm average</td><td>BIDMC PPG and Respiration Dataset</td><td><span class="pill ${qClass(c.heart_rate.quality)}">${esc(comparisonText(c.heart_rate))}</span><div class="comparison-detail">Live ESP32 HR compared with the BIDMC HR average.</div></td></tr>
+      <tr><td>SpO₂</td><td>${esc(s.spo2 || '--')}%</td><td>${esc(b.spo2_average)}% average</td><td>BIDMC PPG and Respiration Dataset</td><td><span class="pill ${qClass(c.spo2.quality)}">${esc(comparisonText(c.spo2))}</span><div class="comparison-detail">Live ESP32 SpO₂ compared with the BIDMC SpO₂ average.</div></td></tr>
+      <tr><td>Tremor Amplitude</td><td>${esc(s.tremor_amplitude)}</td><td>${esc(a.tremor_magnitude_average)} average</td><td>ALAMEDA Parkinson's Disease Tremor Dataset</td><td><span class="pill ${qClass(c.tremor.quality)}">${esc(comparisonText(c.tremor))}</span><div class="comparison-detail">Live MPU6050 amplitude compared with the ALAMEDA Magnitude_mean average.</div></td></tr>
+      <tr><td>Temperature</td><td>${esc(s.temperature)}°C</td><td>36.1–37.2°C</td><td>Project reference range (not a dataset)</td><td><span class="pill ${qClass(c.temperature.quality)}">${esc(c.temperature.quality)}</span><div class="comparison-detail">${esc(c.temperature.interpretation)}</div></td></tr>
     `;
 
     // Compare chart
     buildCompareChart(s, b, a);
     document.getElementById('valStatus').textContent = 'Updated ' + new Date().toLocaleTimeString();
   } catch (e) {
-    document.getElementById('valBody').innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--crit);padding:28px">Error: ' + esc(e.message) + '</td></tr>';
+    document.getElementById('valBody').innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--crit);padding:28px">Error: ' + esc(e.message) + '</td></tr>';
     document.getElementById('valStatus').textContent = 'Error';
   }
 }
 
-function setMeter(prefix, score, quality) {
-  const pct = (score && score > 0) ? score : 0;
-  document.getElementById(prefix + 'Sim').textContent = pct > 0 ? pct + '%' : '--';
-  document.getElementById(prefix + 'Q').textContent = quality || 'Unavailable';
-  setTimeout(() => { document.getElementById(prefix + 'P').style.width = pct + '%'; }, 100);
+function setComparisonCard(prefix, liveValue, referenceText, comparison) {
+  document.getElementById(prefix + 'Sim').textContent = liveValue;
+  document.getElementById(prefix + 'Q').textContent =
+    `${referenceText} · ${comparisonText(comparison)}`;
+
+  const relative = Number(comparison?.relative_to_average_percent || 0);
+  setTimeout(() => {
+    document.getElementById(prefix + 'P').style.width =
+      Math.max(0, Math.min(100, relative)) + '%';
+  }, 100);
+}
+
+function buildDatasetConclusion(sensor, results) {
+  const validScores = [
+    sensor.heart_rate > 0 ? Number(results.heart_rate_similarity) : null,
+    sensor.spo2 > 0 ? Number(results.spo2_similarity) : null,
+    Number.isFinite(Number(sensor.tremor_amplitude))
+      ? Number(results.tremor_similarity)
+      : null
+  ].filter(value => value !== null && Number.isFinite(value));
+
+  const averageAgreement = validScores.length
+    ? validScores.reduce((sum, value) => sum + value, 0) / validScores.length
+    : 0;
+
+  let agreementText;
+  if (!validScores.length) {
+    agreementText = 'There are not enough valid sensor readings for a dataset comparison.';
+  } else if (averageAgreement >= 90) {
+    agreementText = 'The valid ESP32 measurements show very close statistical agreement with the selected dataset averages.';
+  } else if (averageAgreement >= 75) {
+    agreementText = 'The valid ESP32 measurements show good overall statistical agreement with the selected dataset averages.';
+  } else if (averageAgreement >= 50) {
+    agreementText = 'The ESP32 measurements show moderate statistical agreement with the selected dataset averages.';
+  } else {
+    agreementText = 'The ESP32 measurements differ noticeably from the selected dataset averages and should be repeated under stable sensor conditions.';
+  }
+
+  const patientText = (
+    sensor.heart_rate >= 60 && sensor.heart_rate <= 100
+    && sensor.spo2 >= 95
+    && Number(sensor.tremor_severity || 0) <= 1
+  )
+    ? 'For this monitoring snapshot, the valid heart-rate, SpO₂ and tremor indicators are within the project’s expected monitoring thresholds.'
+    : 'One or more valid readings fall outside the project’s expected monitoring thresholds and should be repeated before interpretation.';
+
+  const temperatureText = Number(sensor.temperature) < 32
+    ? ' The temperature value appears to reflect room temperature or insufficient body contact and is excluded from this positive assessment.'
+    : '';
+
+  return `
+    <div style="margin:16px 0 12px;padding:16px 18px;border-radius:16px;
+      border:1px solid rgba(16,217,160,.28);
+      background:linear-gradient(135deg,rgba(16,217,160,.10),rgba(56,189,248,.06));">
+      <strong style="display:block;color:var(--ok);font-size:11px;
+        letter-spacing:1.2px;text-transform:uppercase;margin-bottom:7px;">
+        Final Comparison Conclusion
+      </strong>
+      <span style="color:var(--text);">${esc(agreementText)} ${esc(patientText)}${esc(temperatureText)}</span>
+    </div>
+  `;
 }
 
 function buildCompareChart(s, b, a) {
@@ -788,14 +874,14 @@ function buildCompareChart(s, b, a) {
   compareChartInst = new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: ['Heart Rate', 'SpO₂', 'Tremor amplitude'],
+      labels: ['HR — BIDMC', 'SpO₂ — BIDMC', 'Tremor — ALAMEDA'],
       datasets: [
-        { label: 'Sensor as % of dataset average', data: [
+        { label: 'Live ESP32 data as % of reference average', data: [
           b.hr_average ? (s.heart_rate / b.hr_average) * 100 : 0,
           b.spo2_average ? (s.spo2 / b.spo2_average) * 100 : 0,
           a.tremor_magnitude_average ? (s.tremor_amplitude / a.tremor_magnitude_average) * 100 : 0
         ], backgroundColor: 'rgba(255,45,120,.6)', borderColor: '#ff2d78', borderWidth: 1.5, borderRadius: 6 },
-        { label: 'Dataset average (100%)', data: [100, 100, 100], backgroundColor: 'rgba(0,180,240,.5)', borderColor: '#00b4f0', borderWidth: 1.5, borderRadius: 6 }
+        { label: 'Reference dataset average (100%)', data: [100, 100, 100], backgroundColor: 'rgba(0,180,240,.5)', borderColor: '#00b4f0', borderWidth: 1.5, borderRadius: 6 }
       ]
     },
     options: {

@@ -3,42 +3,96 @@
 #include <HTTPClient.h>
 #include <Wire.h>
 #include "MAX30105.h"
+#include "heartRate.h"
+#include "spo2_algorithm.h"
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 #include <math.h>
 #include "arduino_config.h"
 
+const int SCREEN_WIDTH = 128;
+const int SCREEN_HEIGHT = 64;
+const int OLED_RESET = -1;
+const uint8_t OLED_ADDRESS = 0x3C;
+
 const char* WIFI_SSID = SECRET_WIFI_SSID;
 const char* WIFI_PASS = SECRET_WIFI_PASS;
-const char* SERVER_URL = SECRET_SERVER_URL;
+const char* RENDER_SERVER_URL = SECRET_RENDER_SERVER_URL;
+const char* LOCAL_SERVER_URL = SECRET_LOCAL_SERVER_URL;
 
 MAX30105 particleSensor;
 Adafruit_MPU6050 mpu;
 OneWire oneWire(4);
 DallasTemperature tempSensor(&oneWire);
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 bool maxOK = false;
 bool mpuOK = false;
 bool fingerOn = false;
+bool oledOK = false;
 
-long irBaseline = 0;
-long redBaseline = 0;
-long prevAC = 0;
-long lastBeatTime = 0;
-const int BPM_AVG = 8;
-float bpmBuffer[BPM_AVG] = {0};
-int bpmIdx = 0;
-int bpmCount = 0;
 float avgBpm = 0;
-
-long irMin = 999999;
-long irMax = 0;
-long redMin = 999999;
-long redMax = 0;
-unsigned long lastSpO2 = 0;
 int spo2 = 0;
+
+// Maxim's reference algorithm uses 100 samples (4 seconds at an effective
+// 25 samples/second when sampleAverage=4 and sampleRate=100).
+const int OXIMETER_BUFFER_SIZE = 100;
+const int OXIMETER_STEP = 25;
+const uint32_t FINGER_IR_THRESHOLD = 7000;
+uint32_t irBuffer[OXIMETER_BUFFER_SIZE];
+uint32_t redBuffer[OXIMETER_BUFFER_SIZE];
+int oximeterSamples = 0;
+int32_t calculatedHeartRate = 0;
+int32_t calculatedSpO2 = 0;
+int8_t heartRateValid = 0;
+int8_t spo2Valid = 0;
+uint32_t lastIR = 0;
+uint32_t lastRed = 0;
+unsigned long lastFastBeat = 0;
+const int FAST_BPM_SIZE = 4;
+float fastBpmBuffer[FAST_BPM_SIZE] = {0};
+int fastBpmIndex = 0;
+int fastBpmCount = 0;
+const unsigned long MIN_BEAT_INTERVAL_MS = 350;
+
+float correctPossibleDoubleBpm(float bpm) {
+  // Optical sensors can detect both the main pulse and a secondary wave.
+  // If that produces an implausible doubled resting value, use its half.
+  if (bpm >= 120.0f && bpm <= 200.0f) {
+    float halfBpm = bpm / 2.0f;
+    if (halfBpm >= 50.0f && halfBpm <= 100.0f) {
+      return halfBpm;
+    }
+  }
+  return bpm;
+}
+
+void addFastBpm(float bpm) {
+  bpm = correctPossibleDoubleBpm(bpm);
+  if (bpm < 45.0f || bpm > 150.0f) return;
+
+  // Reject sudden isolated jumps after a stable value has been established.
+  if (
+    avgBpm > 0
+    && (bpm > avgBpm * 1.35f || bpm < avgBpm * 0.65f)
+  ) {
+    return;
+  }
+
+  fastBpmBuffer[fastBpmIndex] = bpm;
+  fastBpmIndex = (fastBpmIndex + 1) % FAST_BPM_SIZE;
+  if (fastBpmCount < FAST_BPM_SIZE) fastBpmCount++;
+
+  float bpmSum = 0;
+  for (int i = 0; i < fastBpmCount; i++) {
+    bpmSum += fastBpmBuffer[i];
+  }
+  avgBpm = bpmSum / fastBpmCount;
+}
 
 float bodyTemp = 0.0;
 String tempStatus = "---";
@@ -56,12 +110,71 @@ String cardiacStatus = "---";
 String spo2Status = "---";
 
 unsigned long lastSample = 0;
-unsigned long lastSend = 0;
+unsigned long lastLocalSend = 0;
+unsigned long lastRenderSend = 0;
 unsigned long lastTempRead = 0;
 unsigned long lastDebug = 0;
+unsigned long lastOledUpdate = 0;
 unsigned long lastWifiAttempt = 0;
 unsigned long lastSuccessfulPost = 0;
-int consecutivePostFailures = 0;
+int consecutiveAllPostFailures = 0;
+
+void updateOled() {
+  if (!oledOK) return;
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  display.setTextWrap(false);
+
+  display.setCursor(0, 0);
+  display.print("HR: ");
+  if (fingerOn && avgBpm > 0) {
+    display.print((int)round(avgBpm));
+    display.print(" bpm");
+  } else if (fingerOn) {
+    display.print("measuring...");
+  } else {
+    display.print("place finger");
+  }
+
+  display.setCursor(0, 11);
+  display.print("SpO2: ");
+  if (fingerOn && spo2 > 0) {
+    display.print(spo2);
+    display.print("%");
+  } else if (fingerOn) {
+    display.print(oximeterSamples);
+    display.print("/100");
+  } else {
+    display.print("--%");
+  }
+
+  display.setCursor(0, 22);
+  display.print("TEMP: ");
+  if (isfinite(bodyTemp) && bodyTemp > -20 && bodyTemp < 80) {
+    display.print(bodyTemp, 1);
+    display.print(" C");
+  } else {
+    display.print("-- C");
+  }
+
+  display.setCursor(0, 33);
+  display.print("TREM: ");
+  display.print(tremSeverity);
+  display.print("/4");
+
+  display.setCursor(0, 44);
+  display.print("AMP: ");
+  display.print(tremAmplitude, 2);
+
+  display.setCursor(0, 55);
+  display.print("FREQ: ");
+  display.print(tremFrequency, 1);
+  display.print("Hz");
+
+  display.display();
+}
 
 void updateCardiacStatus() {
   if (!fingerOn) cardiacStatus = "No finger";
@@ -103,7 +216,156 @@ void maintainWiFi() {
   }
 }
 
-bool sendData() {
+void resetOximeter() {
+  oximeterSamples = 0;
+  calculatedHeartRate = 0;
+  calculatedSpO2 = 0;
+  heartRateValid = 0;
+  spo2Valid = 0;
+  avgBpm = 0;
+  spo2 = 0;
+  lastFastBeat = 0;
+  fastBpmIndex = 0;
+  fastBpmCount = 0;
+  for (int i = 0; i < FAST_BPM_SIZE; i++) fastBpmBuffer[i] = 0;
+}
+
+void processOximeter() {
+  if (!maxOK) {
+    fingerOn = false;
+    resetOximeter();
+    return;
+  }
+
+  // Read every sample already waiting in the MAX30102 FIFO.
+  particleSensor.check();
+  while (particleSensor.available()) {
+    lastRed = particleSensor.getRed();
+    lastIR = particleSensor.getIR();
+    particleSensor.nextSample();
+
+    fingerOn = lastIR >= FINGER_IR_THRESHOLD;
+    if (!fingerOn) {
+      resetOximeter();
+      continue;
+    }
+
+    // Fast heart-rate result: available after the first two detected beats,
+    // while the 100-sample Maxim calculation continues in the background.
+    if (checkForBeat((int32_t)lastIR)) {
+      unsigned long beatNow = millis();
+      if (lastFastBeat == 0) {
+        lastFastBeat = beatNow;
+      } else {
+        unsigned long beatInterval = beatNow - lastFastBeat;
+        if (beatInterval >= MIN_BEAT_INTERVAL_MS) {
+          float instantBpm = 60000.0f / beatInterval;
+          addFastBpm(instantBpm);
+          lastFastBeat = beatNow;
+        }
+      }
+    }
+
+    irBuffer[oximeterSamples] = lastIR;
+    redBuffer[oximeterSamples] = lastRed;
+    oximeterSamples++;
+
+    if (oximeterSamples == OXIMETER_BUFFER_SIZE) {
+      maxim_heart_rate_and_oxygen_saturation(
+        irBuffer,
+        OXIMETER_BUFFER_SIZE,
+        redBuffer,
+        &calculatedSpO2,
+        &spo2Valid,
+        &calculatedHeartRate,
+        &heartRateValid
+      );
+
+      if (
+        heartRateValid
+        && calculatedHeartRate >= 40
+        && calculatedHeartRate <= 200
+      ) {
+        float correctedHeartRate =
+          correctPossibleDoubleBpm((float)calculatedHeartRate);
+
+        // Smooth valid readings without hiding genuine changes.
+        avgBpm = avgBpm <= 0
+          ? correctedHeartRate
+          : avgBpm * 0.80f + correctedHeartRate * 0.20f;
+      }
+
+      if (
+        spo2Valid
+        && calculatedSpO2 >= 70
+        && calculatedSpO2 <= 100
+      ) {
+        spo2 = calculatedSpO2;
+      }
+
+      // Keep the newest 75 samples and calculate again after 25 new ones.
+      for (int i = OXIMETER_STEP; i < OXIMETER_BUFFER_SIZE; i++) {
+        irBuffer[i - OXIMETER_STEP] = irBuffer[i];
+        redBuffer[i - OXIMETER_STEP] = redBuffer[i];
+      }
+      oximeterSamples = OXIMETER_BUFFER_SIZE - OXIMETER_STEP;
+    }
+  }
+}
+
+bool postJsonToServer(const char* serverUrl, const char* serverName, const char* json) {
+  WiFiClient plainClient;
+  WiFiClientSecure secureClient;
+  WiFiClient* client = &plainClient;
+
+  if (String(serverUrl).startsWith("https://")) {
+    // Render uses HTTPS. For a capstone prototype, accept its managed TLS
+    // certificate without storing a CA certificate on the ESP32.
+    secureClient.setInsecure();
+    client = &secureClient;
+  }
+  client->setTimeout(25);
+
+  HTTPClient http;
+  if (!http.begin(*client, serverUrl)) {
+    Serial.printf("[%s] ERROR: http.begin failed\n", serverName);
+    return false;
+  }
+
+  // Free Render services can need extra time after an idle spin-down.
+  http.setConnectTimeout(15000);
+  http.setTimeout(25000);
+  http.addHeader("Content-Type", "application/json");
+
+  int code = http.POST((uint8_t*)json, strlen(json));
+
+  if (code == HTTP_CODE_OK) {
+    lastSuccessfulPost = millis();
+    Serial.printf("[%s] POST 200 OK | heap=%u\n", serverName, ESP.getFreeHeap());
+  } else {
+    if (code > 0) {
+      Serial.printf(
+        "[%s] POST failed: HTTP %d | response=%s\n",
+        serverName,
+        code,
+        http.getString().c_str()
+      );
+    } else {
+      Serial.printf(
+        "[%s] POST failed: %s (%d)\n",
+        serverName,
+        HTTPClient::errorToString(code).c_str(),
+        code
+      );
+    }
+  }
+
+  http.end();
+  client->stop();
+  return code == HTTP_CODE_OK;
+}
+
+bool sendData(bool sendRender, bool sendLocal) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("[HTTP] SKIP: WiFi disconnected");
     return false;
@@ -141,67 +403,33 @@ bool sendData() {
     return false;
   }
 
-  WiFiClient plainClient;
-  WiFiClientSecure secureClient;
-  WiFiClient* client = &plainClient;
-
-  if (String(SERVER_URL).startsWith("https://")) {
-    // Render uses HTTPS. For a capstone prototype, accept its managed TLS
-    // certificate without storing a CA certificate on the ESP32.
-    secureClient.setInsecure();
-    client = &secureClient;
+  // Local updates are frequent; Render updates are less frequent so HTTPS
+  // cannot repeatedly pause optical sampling.
+  bool renderOK = !sendRender;
+  bool localOK = !sendLocal;
+  if (sendLocal) {
+    localOK = postJsonToServer(LOCAL_SERVER_URL, "LOCAL", json);
   }
-  client->setTimeout(25);
-
-  HTTPClient http;
-  if (!http.begin(*client, SERVER_URL)) {
-    Serial.println("[HTTP] ERROR: http.begin failed");
-    return false;
+  if (sendRender) {
+    renderOK = postJsonToServer(RENDER_SERVER_URL, "RENDER", json);
   }
 
-  // Free Render services can need extra time after an idle spin-down.
-  http.setConnectTimeout(15000);
-  http.setTimeout(25000);
-  http.addHeader("Content-Type", "application/json");
-
-  int code = http.POST((uint8_t*)json, strlen(json));
-
-  if (code == HTTP_CODE_OK) {
-    consecutivePostFailures = 0;
-    lastSuccessfulPost = millis();
-    Serial.printf("[HTTP] POST 200 OK | heap=%u\n", ESP.getFreeHeap());
+  if (renderOK || localOK) {
+    consecutiveAllPostFailures = 0;
   } else {
-    consecutivePostFailures++;
-    if (code > 0) {
-      Serial.printf(
-        "[HTTP] POST failed: HTTP %d | response=%s | failures=%d\n",
-        code,
-        http.getString().c_str(),
-        consecutivePostFailures
-      );
-    } else {
-      Serial.printf(
-        "[HTTP] POST failed: %s (%d) | failures=%d\n",
-        HTTPClient::errorToString(code).c_str(),
-        code,
-        consecutivePostFailures
-      );
-    }
+    consecutiveAllPostFailures++;
   }
 
-  http.end();
-  client->stop();
-
-  // Rebuild WiFi after repeated socket/connection failures.
-  if (consecutivePostFailures >= 3) {
-    Serial.println("[HTTP] Three failures: rebuilding WiFi connection");
-    consecutivePostFailures = 0;
+  // Rebuild WiFi only when neither destination can be reached repeatedly.
+  if (consecutiveAllPostFailures >= 3) {
+    Serial.println("[HTTP] Both servers failed 3 times: rebuilding WiFi");
+    consecutiveAllPostFailures = 0;
     WiFi.disconnect(false, false);
     delay(100);
     startWiFiConnection();
   }
 
-  return code == HTTP_CODE_OK;
+  return renderOK && localOK;
 }
 
 void setup() {
@@ -210,6 +438,21 @@ void setup() {
   Wire.begin(21, 22);
 
   Serial.println("\n=== IoT Vital Signs Monitor ROBUST ===");
+
+  if (display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
+    oledOK = true;
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(20, 20);
+    display.println("OLED READY");
+    display.setCursor(8, 36);
+    display.println("Starting system...");
+    display.display();
+    Serial.println("[OLED] Ready");
+  } else {
+    Serial.println("[OLED] NOT FOUND");
+  }
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
@@ -227,18 +470,19 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.print("[WiFi] Connected, IP: ");
     Serial.println(WiFi.localIP());
-    Serial.print("[WiFi] Server: ");
-    Serial.println(SERVER_URL);
+    Serial.print("[WiFi] Render server: ");
+    Serial.println(RENDER_SERVER_URL);
+    Serial.print("[WiFi] Local server: ");
+    Serial.println(LOCAL_SERVER_URL);
   } else {
     Serial.println("[WiFi] Initial connection failed; background retry enabled.");
   }
 
   if (particleSensor.begin(Wire, I2C_SPEED_FAST)) {
     particleSensor.setup(0x1F, 4, 2, 100, 411, 4096);
-    irBaseline = particleSensor.getIR();
-    redBaseline = particleSensor.getRed();
     maxOK = true;
     Serial.println("[MAX30102] Ready");
+    Serial.println("[MAX30102] Place finger steadily for 4-6 seconds");
   } else {
     Serial.println("[MAX30102] NOT FOUND");
   }
@@ -265,97 +509,26 @@ void loop() {
 
   maintainWiFi();
 
-  // HTTP scheduling stays outside the sensor sampling gate.
-  if (now - lastSend >= 1000) {
-    lastSend = now;
-    sendData();
-  }
-
   if (now - lastSample < 20) {
     delay(1);
     return;
   }
   lastSample = now;
 
-  long ir = 0;
-  long red = 0;
-
-  if (maxOK) {
-    ir = particleSensor.getIR();
-    red = particleSensor.getRed();
-    fingerOn = ir > 50000;
-
-    if (!fingerOn) {
-      avgBpm = 0;
-      bpmCount = 0;
-      spo2 = 0;
-      irMin = 999999;
-      irMax = 0;
-      redMin = 999999;
-      redMax = 0;
-    } else {
-      irBaseline = (irBaseline * 95 + ir * 5) / 100;
-      redBaseline = (redBaseline * 95 + red * 5) / 100;
-
-      if (ir > irMax) irMax = ir;
-      if (ir < irMin) irMin = ir;
-      if (red > redMax) redMax = red;
-      if (red < redMin) redMin = red;
-
-      long ac = ir - irBaseline;
-      if (prevAC < 0 && ac >= 0) {
-        long interval = now - lastBeatTime;
-        if (interval > 300) {
-          lastBeatTime = now;
-          float newBpm = 60000.0 / interval;
-          if (newBpm > 40 && newBpm < 180) {
-            bool accept = true;
-            if (
-              bpmCount >= 3
-              && (newBpm > avgBpm * 1.3 || newBpm < avgBpm * 0.7)
-            ) {
-              accept = false;
-            }
-            if (accept) {
-              bpmBuffer[bpmIdx] = newBpm;
-              bpmIdx = (bpmIdx + 1) % BPM_AVG;
-              if (bpmCount < BPM_AVG) bpmCount++;
-              float sum = 0;
-              for (int i = 0; i < bpmCount; i++) sum += bpmBuffer[i];
-              avgBpm = sum / bpmCount;
-            }
-          }
-        }
-      }
-      prevAC = ac;
-
-      if (now - lastSpO2 >= 1000) {
-        if (irBaseline > 0 && redBaseline > 0) {
-          float irAC = irMax - irMin;
-          float redAC = redMax - redMin;
-          if (irAC > 0 && redAC > 0) {
-            float ratio =
-              (redAC / (float)redBaseline) / (irAC / (float)irBaseline);
-            spo2 = (int)(110 - 25 * ratio);
-            if (spo2 > 100) spo2 = 100;
-            if (spo2 < 70) spo2 = 0;
-          }
-        }
-        irMax = 0;
-        irMin = 999999;
-        redMax = 0;
-        redMin = 999999;
-        lastSpO2 = now;
-      }
-    }
-  } else {
-    fingerOn = false;
-    avgBpm = 0;
-    spo2 = 0;
-  }
+  processOximeter();
 
   updateCardiacStatus();
   updateSpo2Status();
+
+  // Prioritize sensor sampling first. The local dashboard refreshes every
+  // second; Render receives the same values every 10 seconds.
+  bool localDue = now - lastLocalSend >= 1000;
+  bool renderDue = now - lastRenderSend >= 10000;
+  if (localDue || renderDue) {
+    if (localDue) lastLocalSend = now;
+    if (renderDue) lastRenderSend = now;
+    sendData(renderDue, localDue);
+  }
 
   if (mpuOK) {
     sensors_event_t a, g, tempEvent;
@@ -427,6 +600,11 @@ void loop() {
     lastTempRead = now;
   }
 
+  if (now - lastOledUpdate >= 500) {
+    lastOledUpdate = now;
+    updateOled();
+  }
+
   if (now - lastDebug >= 2000) {
     Serial.println("--------------------------------");
     Serial.printf(
@@ -441,11 +619,22 @@ void loop() {
       "[MAX30102] OK=%s | Finger=%s | IR=%ld | RED=%ld\n",
       maxOK ? "YES" : "NO",
       fingerOn ? "YES" : "NO",
-      ir,
-      red
+      (long)lastIR,
+      (long)lastRed
     );
-    Serial.printf("[HR] %.1f bpm | %s\n", avgBpm, cardiacStatus.c_str());
-    Serial.printf("[SpO2] %d%% | %s\n", spo2, spo2Status.c_str());
+    Serial.printf(
+      "[HR] %.1f bpm | valid=%d | samples=%d | %s\n",
+      avgBpm,
+      heartRateValid,
+      oximeterSamples,
+      cardiacStatus.c_str()
+    );
+    Serial.printf(
+      "[SpO2] %d%% | valid=%d | %s\n",
+      spo2,
+      spo2Valid,
+      spo2Status.c_str()
+    );
     Serial.printf("[TEMP] %.1f C | %s\n", bodyTemp, tempStatus.c_str());
     Serial.printf(
       "[TREMOR] Amp=%.3f | Freq=%.2fHz | Sev=%d | %s\n",
