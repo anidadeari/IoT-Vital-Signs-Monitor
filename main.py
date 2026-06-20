@@ -86,6 +86,33 @@ OLLAMA_BASE_URL = os.getenv(
 ).rstrip("/")
 
 connected_clients = []
+LIVE_READING_TIMEOUT_SECONDS = int(
+    os.getenv("LIVE_READING_TIMEOUT_SECONDS", "25")
+)
+
+
+def with_live_status(row, stream_event="snapshot"):
+    """Attach freshness metadata so stored data is not presented as live data."""
+    if not row:
+        return row
+
+    payload = dict(row)
+    try:
+        reading_time = datetime.strptime(
+            payload["timestamp"],
+            "%Y-%m-%d %H:%M:%S",
+        )
+        age_seconds = max(
+            0,
+            int((datetime.now() - reading_time).total_seconds()),
+        )
+    except (KeyError, TypeError, ValueError):
+        age_seconds = LIVE_READING_TIMEOUT_SECONDS + 1
+
+    payload["data_age_seconds"] = age_seconds
+    payload["is_live"] = age_seconds <= LIVE_READING_TIMEOUT_SECONDS
+    payload["stream_event"] = stream_event
+    return payload
 
 
 async def broadcast_sensor_data(message):
@@ -1279,7 +1306,15 @@ async def receive_data(data: dict):
     finally:
         conn.close()
 
-    message = json.dumps({**clean, "timestamp": timestamp})
+    message = json.dumps(
+        {
+            **clean,
+            "timestamp": timestamp,
+            "data_age_seconds": 0,
+            "is_live": True,
+            "stream_event": "live",
+        }
+    )
 
     # A slow/stale dashboard WebSocket must never block the ESP32 POST cycle.
     asyncio.create_task(broadcast_sensor_data(message))
@@ -1537,7 +1572,7 @@ def get_latest():
     row = get_latest_row()
     if not row:
         return {"status": "no_data", "message": "No data yet"}
-    return make_json_safe(row)
+    return make_json_safe(with_live_status(row))
 
 
 @app.get("/api/history")
@@ -1635,7 +1670,9 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         latest = get_latest_row()
         if latest:
-            await websocket.send_text(json.dumps(make_json_safe(latest)))
+            await websocket.send_text(
+                json.dumps(make_json_safe(with_live_status(latest)))
+            )
 
         while True:
             # Keeps websocket alive. Dashboard may send ping text.

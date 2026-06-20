@@ -117,7 +117,9 @@ unsigned long lastDebug = 0;
 unsigned long lastOledUpdate = 0;
 unsigned long lastWifiAttempt = 0;
 unsigned long lastSuccessfulPost = 0;
+unsigned long localRetryAfter = 0;
 int consecutiveAllPostFailures = 0;
+int consecutiveLocalPostFailures = 0;
 
 void updateOled() {
   if (!oledOK) return;
@@ -313,7 +315,13 @@ void processOximeter() {
   }
 }
 
-bool postJsonToServer(const char* serverUrl, const char* serverName, const char* json) {
+bool postJsonToServer(
+  const char* serverUrl,
+  const char* serverName,
+  const char* json,
+  int connectTimeoutMs,
+  int requestTimeoutMs
+) {
   WiFiClient plainClient;
   WiFiClientSecure secureClient;
   WiFiClient* client = &plainClient;
@@ -324,7 +332,7 @@ bool postJsonToServer(const char* serverUrl, const char* serverName, const char*
     secureClient.setInsecure();
     client = &secureClient;
   }
-  client->setTimeout(25);
+  client->setTimeout((requestTimeoutMs + 999) / 1000);
 
   HTTPClient http;
   if (!http.begin(*client, serverUrl)) {
@@ -333,8 +341,8 @@ bool postJsonToServer(const char* serverUrl, const char* serverName, const char*
   }
 
   // Free Render services can need extra time after an idle spin-down.
-  http.setConnectTimeout(15000);
-  http.setTimeout(25000);
+  http.setConnectTimeout(connectTimeoutMs);
+  http.setTimeout(requestTimeoutMs);
   http.addHeader("Content-Type", "application/json");
 
   int code = http.POST((uint8_t*)json, strlen(json));
@@ -403,15 +411,38 @@ bool sendData(bool sendRender, bool sendLocal) {
     return false;
   }
 
-  // Local updates are frequent; Render updates are less frequent so HTTPS
-  // cannot repeatedly pause optical sampling.
+  // Render goes first so cloud updates continue when the computer is off.
   bool renderOK = !sendRender;
   bool localOK = !sendLocal;
-  if (sendLocal) {
-    localOK = postJsonToServer(LOCAL_SERVER_URL, "LOCAL", json);
-  }
   if (sendRender) {
-    renderOK = postJsonToServer(RENDER_SERVER_URL, "RENDER", json);
+    renderOK = postJsonToServer(
+      RENDER_SERVER_URL,
+      "RENDER",
+      json,
+      15000,
+      25000
+    );
+  }
+  if (sendLocal) {
+    localOK = postJsonToServer(
+      LOCAL_SERVER_URL,
+      "LOCAL",
+      json,
+      1200,
+      1800
+    );
+
+    if (localOK) {
+      consecutiveLocalPostFailures = 0;
+      localRetryAfter = 0;
+    } else {
+      consecutiveLocalPostFailures++;
+      if (consecutiveLocalPostFailures >= 2) {
+        localRetryAfter = millis() + 30000;
+        consecutiveLocalPostFailures = 0;
+        Serial.println("[LOCAL] Offline; retrying in 30 seconds");
+      }
+    }
   }
 
   if (renderOK || localOK) {
@@ -522,7 +553,11 @@ void loop() {
 
   // Prioritize sensor sampling first. The local dashboard refreshes every
   // second; Render receives the same values every 10 seconds.
-  bool localDue = now - lastLocalSend >= 1000;
+  bool localRetryReady = (
+    localRetryAfter == 0
+    || (long)(now - localRetryAfter) >= 0
+  );
+  bool localDue = localRetryReady && now - lastLocalSend >= 1000;
   bool renderDue = now - lastRenderSend >= 10000;
   if (localDue || renderDue) {
     if (localDue) lastLocalSend = now;

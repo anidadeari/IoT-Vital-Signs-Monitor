@@ -387,7 +387,11 @@ tr:hover td{background:rgba(255,255,255,.025);}
   </div>
 
   <div class="charts-grid">
-    <div class="panel"><div class="panel-title"><span style="--tc:#ff2d78"></span>Heart Rate — Live</div><canvas id="hrC" height="120" role="img" aria-label="Live heart rate chart">Live heart rate readings over time.</canvas></div>
+    <div class="panel">
+      <div class="panel-title"><span style="--tc:#ff2d78"></span>Pulse Wave — Live · EKG-style</div>
+      <canvas id="hrC" height="120" role="img" aria-label="Animated pulse waveform based on the live heart-rate value">Animated pulse waveform based on the live heart-rate value.</canvas>
+      <div class="comparison-detail">Visual pulse animation derived from MAX30102 heart rate — not a diagnostic ECG signal.</div>
+    </div>
     <div class="panel"><div class="panel-title"><span style="--tc:#00b4f0"></span>SpO₂ — Live</div><canvas id="spC" height="120" role="img" aria-label="Live SpO2 chart">Live SpO2 readings over time.</canvas></div>
     <div class="panel"><div class="panel-title"><span style="--tc:#fbbf24"></span>Temperature — Live</div><canvas id="tpC" height="120" role="img" aria-label="Live temperature chart">Live temperature readings over time.</canvas></div>
     <div class="panel"><div class="panel-title"><span style="--tc:#a855f7"></span>Tremor Amplitude — Live</div><canvas id="trC" height="120" role="img" aria-label="Live tremor amplitude chart">Live tremor amplitude readings over time.</canvas></div>
@@ -592,6 +596,8 @@ const WS_BASE = (window.location.protocol === 'file:') ? 'ws://localhost:8000' :
 let latest = {};
 let ws = null;
 let compareChartInst = null;
+let lastFreshReadingAt = 0;
+const LIVE_TIMEOUT_MS = 25000;
 
 // ───── NAVIGATION ─────
 function goTo(name, btn) {
@@ -619,10 +625,78 @@ function makeChart(id, color, mn, mx) {
     }
   });
 }
-const hrChart = makeChart('hrC', '#ff2d78', 40, 160);
+function makePulseChart() {
+  return new Chart(document.getElementById('hrC'), {
+    type: 'line',
+    data: {
+      labels: Array(140).fill(''),
+      datasets: [{
+        data: Array(140).fill(0),
+        borderColor: '#ff2d78',
+        backgroundColor: 'rgba(255,45,120,.08)',
+        fill: true,
+        tension: .12,
+        pointRadius: 0,
+        borderWidth: 2.4
+      }]
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      interaction: { intersect: false },
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      scales: {
+        y: {
+          min: -.40,
+          max: 1.20,
+          grid: { color: 'rgba(255,45,120,.08)' },
+          ticks: { display: false }
+        },
+        x: {
+          grid: { color: 'rgba(255,45,120,.045)' },
+          ticks: { display: false }
+        }
+      }
+    }
+  });
+}
+
+const hrChart = makePulseChart();
 const spChart = makeChart('spC', '#00b4f0', 80, 100);
 const tpChart = makeChart('tpC', '#fbbf24', 25, 42);
 const trChart = makeChart('trC', '#a855f7', 0, 3);
+let pulseBpm = 0;
+let pulseStreamLive = false;
+let pulseStartedAt = performance.now();
+
+function gaussian(x, center, width, height) {
+  const distance = (x - center) / width;
+  return height * Math.exp(-0.5 * distance * distance);
+}
+
+function pulseWaveSample(now) {
+  if (!pulseStreamLive || pulseBpm <= 0) return 0;
+
+  const beatMs = 60000 / Math.max(45, Math.min(150, pulseBpm));
+  const phase = ((now - pulseStartedAt) % beatMs) / beatMs;
+
+  return (
+    gaussian(phase, .12, .025, .12) +
+    gaussian(phase, .205, .012, -.16) +
+    gaussian(phase, .235, .010, 1.08) +
+    gaussian(phase, .270, .014, -.30) +
+    gaussian(phase, .48, .055, .28)
+  );
+}
+
+function animatePulseWave() {
+  const values = hrChart.data.datasets[0].data;
+  values.push(pulseWaveSample(performance.now()));
+  values.shift();
+  hrChart.update('none');
+}
+
+setInterval(animatePulseWave, 50);
 
 function pushChart(c, v) {
   const t = new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -630,6 +704,31 @@ function pushChart(c, v) {
   c.data.datasets[0].data.push(v);
   if (c.data.labels.length > 30) { c.data.labels.shift(); c.data.datasets[0].data.shift(); }
   c.update();
+}
+
+function replaceChartData(chart, labels, values) {
+  chart.data.labels = [...labels];
+  chart.data.datasets[0].data = [...values];
+  chart.update();
+}
+
+async function loadChartHistory() {
+  try {
+    const rows = await fetch(API_BASE + '/api/history?limit=30').then(r => r.json());
+    if (!Array.isArray(rows) || !rows.length) return;
+
+    const ordered = [...rows].reverse();
+    const labels = ordered.map(r => {
+      const raw = String(r.timestamp || '');
+      return raw.includes(' ') ? raw.split(' ')[1] : raw;
+    });
+
+    replaceChartData(spChart, labels, ordered.map(r => r.spo2 > 0 ? r.spo2 : null));
+    replaceChartData(tpChart, labels, ordered.map(r => r.temperature > 0 ? r.temperature : null));
+    replaceChartData(trChart, labels, ordered.map(r => Number(r.tremor_amplitude ?? 0)));
+  } catch (e) {
+    console.error('loadChartHistory:', e);
+  }
 }
 
 // ───── STATUS BADGE ─────
@@ -659,11 +758,12 @@ function showAlert(msg, type = 'crit') {
 }
 
 // ───── UPDATE VITALS ─────
-function updateVitals(d) {
+function updateVitals(d, addToCharts = true) {
   const hr = d.heart_rate || 0;
   const sp = d.spo2 || 0;
   const tp = d.temperature || 0;
   const tr = d.tremor_severity ?? 0;
+  pulseBpm = hr;
 
   document.getElementById('hrV').textContent = hr || '--';
   document.getElementById('spV').textContent = sp || '--';
@@ -671,7 +771,7 @@ function updateVitals(d) {
   document.getElementById('trV').textContent = d.tremor_severity ?? '--';
 
   // HR pulse animation
-  if (hr > 0) {
+  if (hr > 0 && d.is_live !== false) {
     document.getElementById('hrPulse').style.display = 'block';
     document.getElementById('spPulse').style.display = 'block';
   }
@@ -693,27 +793,59 @@ function updateVitals(d) {
   badge('trS', d.tremor_status || '---', tr === 0 ? 's-ok' : tr <= 2 ? 's-warn' : 's-crit');
 
   // Push to charts
-  if (hr > 0) pushChart(hrChart, hr);
-  if (sp > 0) pushChart(spChart, sp);
-  if (tp > 0) pushChart(tpChart, tp);
-  if (d.tremor_amplitude >= 0) pushChart(trChart, d.tremor_amplitude);
+  if (addToCharts) {
+    if (sp > 0) pushChart(spChart, sp);
+    if (tp > 0) pushChart(tpChart, tp);
+    if (d.tremor_amplitude >= 0) pushChart(trChart, d.tremor_amplitude);
+  }
 }
 
 // ───── WEBSOCKET ─────
+function showConnectionState(text, live, timeText = '') {
+  const cb = document.getElementById('connBadge');
+  cb.classList.toggle('live', live);
+  document.getElementById('connTxt').textContent = text;
+  const ct = document.getElementById('connTime');
+  ct.textContent = timeText;
+  ct.style.display = timeText ? '' : 'none';
+}
+
+function markEsp32Offline() {
+  pulseStreamLive = false;
+  document.getElementById('hrPulse').style.display = 'none';
+  document.getElementById('spPulse').style.display = 'none';
+  showConnectionState('ESP32 offline', false);
+}
+
+function checkReadingFreshness() {
+  if (lastFreshReadingAt && Date.now() - lastFreshReadingAt > LIVE_TIMEOUT_MS) {
+    lastFreshReadingAt = 0;
+    markEsp32Offline();
+  }
+}
+
 function wsConnect() {
   ws = new WebSocket(WS_BASE + '/ws');
-  const cb = document.getElementById('connBadge');
-  ws.onopen = () => { cb.classList.add('live'); document.getElementById('connTxt').textContent = 'Live'; };
+  ws.onopen = () => showConnectionState('Waiting for ESP32', false);
   ws.onmessage = ({ data }) => {
     try {
-      const d = JSON.parse(data); latest = d; updateVitals(d);
-      const ct = document.getElementById('connTime');
-      ct.textContent = new Date().toLocaleTimeString(); ct.style.display = '';
+      const d = JSON.parse(data);
+      latest = d;
+      const isFresh = d.is_live !== false;
+      updateVitals(d, d.stream_event === 'live');
+
+      if (isFresh) {
+        pulseStreamLive = true;
+        const ageMs = Math.max(0, Number(d.data_age_seconds || 0) * 1000);
+        lastFreshReadingAt = Date.now() - ageMs;
+        showConnectionState('Live', true, new Date().toLocaleTimeString());
+      } else {
+        markEsp32Offline();
+      }
     } catch (e) { console.error('WS:', e); }
   };
   ws.onclose = () => {
-    cb.classList.remove('live'); document.getElementById('connTxt').textContent = 'Reconnecting…';
-    document.getElementById('connTime').style.display = 'none';
+    showConnectionState('Reconnecting...', false);
     setTimeout(wsConnect, 2200);
   };
 }
@@ -723,7 +855,8 @@ async function loadLatest(silent = false) {
     const d = await fetch(API_BASE + '/api/latest').then(r => r.json());
     if (!d.message && d.status !== 'no_data') {
       latest = d;
-      updateVitals(d);
+      updateVitals(d, false);
+      if (d.is_live === false) markEsp32Offline();
       return d;
     }
     return null;
@@ -1147,9 +1280,11 @@ function setAIResult(bodyId, cardId, riskId, timeId, result) {
 
 // ───── INIT ─────
 wsConnect();
+loadChartHistory();
 loadLatest();
 loadStats();
 setInterval(loadStats, 12000);
+setInterval(checkReadingFreshness, 3000);
 </script>
 </body>
 </html>
