@@ -194,6 +194,32 @@ http://127.0.0.1:8000/dashboard
 
 The dashboard should be opened through FastAPI, not directly as a local `dashboard.html` file.
 
+## Deployment on Render
+
+In addition to running the system locally, I deployed the FastAPI backend and dashboard on Render. I did this so the ESP32 can send measurements to a cloud-hosted endpoint and the dashboard can be opened without starting the local server first.
+
+The deployed dashboard is available at:
+
+```text
+https://iot-vital-signs-monitor.onrender.com/dashboard
+```
+
+The ESP32 sends cloud updates to:
+
+```text
+https://iot-vital-signs-monitor.onrender.com/api/data
+```
+
+The deployment settings are stored in `render.yaml`. Render installs the packages from `requirements.txt` and starts the application with:
+
+```text
+uvicorn main:app --host 0.0.0.0 --port $PORT
+```
+
+The `GROQ_API_KEY` is configured as an environment variable on Render and is not stored in the repository.
+
+I used Render's free plan for this capstone prototype. Because the service can become inactive after a period without traffic, the first request may take longer while the server starts again. For this reason, the ESP32 sends local updates more frequently and cloud updates less frequently.
+
 ## Configuring the ESP32
 
 Copy:
@@ -294,4 +320,3 @@ Future work could include:
 **Anida Deari**  
 Computer Science Capstone Project  
 June 2026
-
