@@ -83,8 +83,8 @@ DASHBOARD_PATH = BASE_DIR / "dashboard.html"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # IMPORTANT:
-# Mos e shkruaj API key direkt në kod.
-# Në terminal përdor:
+# Do not write the API key directly in the code.
+# In the terminal, use:
 # Windows PowerShell:
 #   $env:GROQ_API_KEY="your_key_here"
 # CMD:
