@@ -45,9 +45,12 @@ const int OXIMETER_STEP = 25;
 // MAX30102 modules differ noticeably in LED/lens sensitivity. Use a slightly
 // lower threshold and debounce removal so one noisy sample cannot erase the
 // whole four-second calibration buffer.
-const uint32_t FINGER_IR_THRESHOLD_ON = 5000;
-const uint32_t FINGER_IR_THRESHOLD_OFF = 3500;
-const int FINGER_OFF_SAMPLES = 25;
+// Detect the finger quickly. Declare removal after only a few consecutive
+// near-zero readings, so the OLED/dashboard shows NO FINGER immediately,
+// while the low OFF threshold avoids false removal during small movements.
+const uint32_t FINGER_IR_THRESHOLD_ON = 3000;
+const uint32_t FINGER_IR_THRESHOLD_OFF = 1200;
+const int FINGER_OFF_SAMPLES = 3;
 int fingerLowSamples = 0;
 uint32_t irBuffer[OXIMETER_BUFFER_SIZE];
 uint32_t redBuffer[OXIMETER_BUFFER_SIZE];
@@ -63,7 +66,7 @@ const int FAST_BPM_SIZE = 4;
 float fastBpmBuffer[FAST_BPM_SIZE] = {0};
 int fastBpmIndex = 0;
 int fastBpmCount = 0;
-const unsigned long MIN_BEAT_INTERVAL_MS = 350;
+const unsigned long MIN_BEAT_INTERVAL_MS = 300;
 
 float correctPossibleDoubleBpm(float bpm) {
   // Optical sensors can detect both the main pulse and a secondary wave.
@@ -79,7 +82,7 @@ float correctPossibleDoubleBpm(float bpm) {
 
 void addFastBpm(float bpm) {
   bpm = correctPossibleDoubleBpm(bpm);
-  if (bpm < 45.0f || bpm > 150.0f) return;
+  if (bpm < 40.0f || bpm > 180.0f) return;
 
   // Reject sudden isolated jumps after a stable value has been established.
   if (
@@ -126,6 +129,7 @@ unsigned long lastSuccessfulPost = 0;
 unsigned long localRetryAfter = 0;
 int consecutiveAllPostFailures = 0;
 int consecutiveLocalPostFailures = 0;
+bool urgentLocalFingerUpdate = false;
 
 void updateOled() {
   if (!oledOK) return;
@@ -267,6 +271,7 @@ void processOximeter() {
       fingerOn = false;
       Serial.printf("[MAX30102] Finger removed | IR=%lu\n", lastIR);
       resetOximeter();
+      urgentLocalFingerUpdate = true;
       continue;
     }
 
@@ -344,6 +349,8 @@ bool postJsonToServer(
   int connectTimeoutMs,
   int requestTimeoutMs
 ) {
+  Serial.printf("[%s] POST -> %s\n", serverName, serverUrl);
+
   WiFiClient plainClient;
   WiFiClientSecure secureClient;
   WiFiClient* client = &plainClient;
@@ -433,17 +440,27 @@ bool sendData(bool sendRender, bool sendLocal) {
     return false;
   }
 
-  // Send locally first for the fastest localhost dashboard update. If the
-  // computer is off, local retries are paused and Render continues alone.
+  // Render and local delivery are independent. Send to Render first whenever
+  // it is due, so a slow/unreachable laptop can never delay the cloud update.
   bool renderOK = !sendRender;
   bool localOK = !sendLocal;
+  if (sendRender) {
+    renderOK = postJsonToServer(
+      RENDER_SERVER_URL,
+      "RENDER",
+      json,
+      8000,
+      12000
+    );
+  }
+
   if (sendLocal) {
     localOK = postJsonToServer(
       LOCAL_SERVER_URL,
       "LOCAL",
       json,
-      700,
-      1000
+      1000,
+      2000
     );
 
     if (localOK) {
@@ -457,15 +474,6 @@ bool sendData(bool sendRender, bool sendLocal) {
         Serial.println("[LOCAL] Offline; retrying in 5 seconds");
       }
     }
-  }
-  if (sendRender) {
-    renderOK = postJsonToServer(
-      RENDER_SERVER_URL,
-      "RENDER",
-      json,
-      8000,
-      12000
-    );
   }
 
   if (renderOK || localOK) {
@@ -573,6 +581,15 @@ void loop() {
 
   updateCardiacStatus();
   updateSpo2Status();
+
+  // Do not wait for the normal one-second cycle when the finger is removed.
+  // Push HR=0, SpO2=0 and "No finger" to localhost immediately.
+  if (urgentLocalFingerUpdate && WiFi.status() == WL_CONNECTED) {
+    urgentLocalFingerUpdate = false;
+    lastLocalSend = now;
+    Serial.println("[LOCAL] Immediate NO FINGER update");
+    sendData(false, true);
+  }
 
   // Localhost refreshes every second. Cloud updates are intentionally slower:
   // HTTPS can pause the loop and starve the MAX30102 FIFO during calibration.

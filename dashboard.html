@@ -796,14 +796,18 @@ function updateVitals(d, addToCharts = true) {
   if (hr > 0 && d.is_live !== false) {
     document.getElementById('hrPulse').style.display = 'block';
     document.getElementById('spPulse').style.display = 'block';
+  } else {
+    document.getElementById('hrPulse').style.display = 'none';
+    document.getElementById('spPulse').style.display = 'none';
   }
 
   // HR badge
   const cs = d.cardiac_status || '---';
-  badge('hrS', cs, cs === 'NORMAL' ? 's-ok' : cs === '---' || cs === 'No finger' || cs === 'Calibrating' ? 's-off' : 's-crit');
+  const noFinger = cs === 'No finger';
+  badge('hrS', noFinger ? 'NO FINGER' : cs, cs === 'NORMAL' ? 's-ok' : cs === '---' || noFinger || cs === 'Calibrating' ? 's-off' : 's-crit');
 
   // SpO2 badge
-  badge('spS', sp >= 95 ? 'NORMAL' : sp >= 90 ? 'LOW' : sp > 0 ? 'CRITICAL' : '---', sp >= 95 ? 's-ok' : sp >= 90 ? 's-warn' : sp > 0 ? 's-crit' : 's-off');
+  badge('spS', noFinger ? 'NO FINGER' : sp >= 95 ? 'NORMAL' : sp >= 90 ? 'LOW' : sp > 0 ? 'CRITICAL' : '---', sp >= 95 ? 's-ok' : sp >= 90 ? 's-warn' : sp > 0 ? 's-crit' : 's-off');
   if (sp > 0 && sp < 90) showAlert('SpO₂ critically low: ' + sp + '%');
 
   // Temp badge

@@ -4,7 +4,7 @@ title IoT Vital Signs Dashboard Server
 
 echo Starting FastAPI on this computer...
 echo Local dashboard: http://127.0.0.1:8000/dashboard
-echo ESP32 endpoint:   http://10.33.186.50:8000/api/data
+echo ESP32 endpoint:   http://10.90.251.50:8000/api/data
 echo.
 
 where py >nul 2>nul
