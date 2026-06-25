@@ -9,3 +9,9 @@ services:
     envVars:
       - key: GROQ_API_KEY
         sync: false
+      - key: LLAMA32_CLOUD_FALLBACK
+        value: "true"
+      - key: LLAMA32_CLOUD_MODEL
+        value: openai/gpt-oss-20b
+      - key: PREDICTION_TIMEOUT_SECONDS
+        value: "30"

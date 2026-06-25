@@ -109,11 +109,12 @@ While SpO₂ is being calculated, the display shows the sample progress. This ma
 
 The backend can compare responses from:
 
-- Llama 3.3 70B through Groq Cloud;
-- Llama 3.1 8B Instant through Groq Cloud;
-- Llama 3.2 through a local Ollama service.
+- Llama 3.3 70B through Groq Cloud for a comprehensive combined-risk review;
+- Llama 3.1 8B Instant through Groq Cloud for rapid triage;
+- Llama 3.2 through a local Ollama service for sensor-quality review;
+- GPT-OSS 20B through Groq as the automatic third-model fallback on Render.
 
-The AI layer is optional. Sensor collection, storage, the dashboard, dataset comparison, and deterministic monitoring assessment continue to work when an AI provider is not configured.
+Each model receives the same verified sensor snapshot but a different analysis focus. The four deterministic vital classifications and dataset percentages may correctly agree because they are based on the same measurements; the focus insight, guidance, wording, and quality score are independently generated and evaluated. The AI layer is optional. Sensor collection, storage, the dashboard, dataset comparison, and deterministic monitoring assessment continue to work when an AI provider is not configured.
 
 ## Biomedical dataset comparison
 
@@ -216,7 +217,7 @@ The deployment settings are stored in `render.yaml`. Render installs the package
 uvicorn main:app --host 0.0.0.0 --port $PORT
 ```
 
-The `GROQ_API_KEY` is configured as an environment variable on Render and is not stored in the repository.
+The `GROQ_API_KEY` is configured as an environment variable on Render and is not stored in the repository. Because a local Ollama process is not available inside this Render web service, `LLAMA32_CLOUD_FALLBACK=true` uses `openai/gpt-oss-20b` for the third comparison card. Render ignores a stale `OLLAMA_BASE_URL`, and `PREDICTION_TIMEOUT_SECONDS=30` prevents one unavailable model from delaying the complete comparison for several minutes. The dashboard shows the actual model and provider instead of labeling the fallback as Llama 3.2.
 
 I used Render's free plan for this capstone prototype. Because the service can become inactive after a period without traffic, the first request may take longer while the server starts again. For this reason, the ESP32 sends local updates more frequently and cloud updates less frequently.
 
@@ -273,6 +274,13 @@ For a local Ollama service:
 
 ```powershell
 $env:OLLAMA_BASE_URL="http://localhost:11434"
+```
+
+Optional Render/cloud fallback settings:
+
+```powershell
+$env:LLAMA32_CLOUD_FALLBACK="true"
+$env:LLAMA32_CLOUD_MODEL="openai/gpt-oss-20b"
 ```
 
 Start the backend from the same terminal so it can read the environment variables.

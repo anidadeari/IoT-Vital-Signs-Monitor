@@ -90,10 +90,22 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 # CMD:
 #   set GROQ_API_KEY=your_key_here
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+IS_RENDER = bool(os.getenv("RENDER"))
 OLLAMA_BASE_URL = os.getenv(
     "OLLAMA_BASE_URL",
-    "" if os.getenv("RENDER") else "http://localhost:11434",
+    "" if IS_RENDER else "http://localhost:11434",
 ).rstrip("/")
+PREDICTION_TIMEOUT_SECONDS = int(
+    os.getenv("PREDICTION_TIMEOUT_SECONDS", "30")
+)
+LLAMA32_CLOUD_FALLBACK = os.getenv(
+    "LLAMA32_CLOUD_FALLBACK",
+    "true" if IS_RENDER else "false",
+).lower() in {"1", "true", "yes", "on"}
+LLAMA32_CLOUD_MODEL = os.getenv(
+    "LLAMA32_CLOUD_MODEL",
+    "openai/gpt-oss-20b",
+)
 
 connected_clients = []
 LIVE_READING_TIMEOUT_SECONDS = int(
@@ -610,7 +622,7 @@ def build_monitoring_assessment(data, validation=None):
 # ==========================================================
 # AI PROMPT
 # ==========================================================
-def build_prompt(data, validation=None, assessment=None):
+def build_prompt(data, validation=None, assessment=None, model_id="groq_large"):
     heart_rate = data.get("heart_rate", 0)
     spo2 = data.get("spo2", 0)
     temperature = data.get("temperature", 0)
@@ -682,8 +694,24 @@ def build_prompt(data, validation=None, assessment=None):
         prediction_labels()
     )
 
+    model_focus = {
+        "groq_large": (
+            "Act as the comprehensive reviewer. In FOCUS INSIGHT, explain how the "
+            "four signals combine and identify the main risk-driving signal."
+        ),
+        "groq_compact": (
+            "Act as the rapid triage reviewer. In FOCUS INSIGHT, state the single "
+            "most important next measurement or action in direct language."
+        ),
+        "ollama": (
+            "Act as the sensor-quality reviewer. In FOCUS INSIGHT, distinguish "
+            "reliable signals from questionable measurements and mention dataset context."
+        ),
+    }.get(model_id, "")
+
     return f"""
 Create a concise classification report. Use ONLY these verified facts.
+{model_focus}
 HR {heart_rate} bpm: {findings.get('Heart rate', 'unavailable')}.
 SpO2 {spo2}%: {findings.get('SpO2', 'unavailable')}.
 Temperature {temperature}°C: {findings.get('Temperature', 'unavailable')}.
@@ -699,6 +727,8 @@ Temperature: {temperature}°C — {temperature_prediction[0]} — {temperature_p
 Tremor: amplitude {tremor_amplitude} m/s², severity {tremor_severity}/4 — {tremor_prediction[0]} — {tremor_prediction[1]}
 OVERALL PREDICTION
 One sentence summarizing the complete monitoring state.
+FOCUS INSIGHT
+One sentence following your assigned reviewer focus. Do not repeat the overall sentence.
 PATIENT GUIDANCE
 One concise sentence explaining what the patient should do now.
 WHEN TO SEEK HELP
@@ -721,7 +751,7 @@ healthy range.
 # ==========================================================
 # AI MODELS
 # ==========================================================
-def call_groq_model(prompt, model_name):
+def call_groq_model(prompt, model_name, temperature=0.1):
     if not GROQ_API_KEY:
         return "Groq Cloud is optional and is not configured on this computer."
 
@@ -736,9 +766,9 @@ def call_groq_model(prompt, model_name):
                 "model": model_name,
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": 220,
-                "temperature": 0.1,
+                "temperature": temperature,
             },
-            timeout=25,
+            timeout=(5, 20),
         )
 
         if response.status_code != 200:
@@ -751,11 +781,11 @@ def call_groq_model(prompt, model_name):
 
 
 def call_groq_large(prompt):
-    return call_groq_model(prompt, "llama-3.3-70b-versatile")
+    return call_groq_model(prompt, "llama-3.3-70b-versatile", 0.12)
 
 
 def call_groq_compact(prompt):
-    return call_groq_model(prompt, "llama-3.1-8b-instant")
+    return call_groq_model(prompt, "llama-3.1-8b-instant", 0.22)
 
 
 def call_ollama(prompt):
@@ -771,13 +801,13 @@ def call_ollama(prompt):
                 "stream": False,
                 "keep_alive": "10m",
                 "options": {
-                    "temperature": 0.1,
+                    "temperature": 0.28,
                     "num_predict": 240,
                     "num_ctx": 4096,
                     "repeat_penalty": 1.1,
                 },
             },
-            timeout=150,
+            timeout=(5, 45),
         )
 
         if response.status_code != 200:
@@ -789,7 +819,42 @@ def call_ollama(prompt):
         return f"Ollama error: {str(e)}. Is Ollama reachable at {OLLAMA_BASE_URL}?"
 
 
-def normalize_prediction_output(text, data, validation, assessment=None):
+def llama32_engine():
+    """Select local Llama 3.2 or a Render-safe cloud fallback."""
+    # A localhost Ollama process is not part of the Render web service.
+    # Ignore stale OLLAMA_BASE_URL values there so prediction never waits
+    # for the old 150-second local-model timeout.
+    if OLLAMA_BASE_URL and not IS_RENDER:
+        return {
+            "call": call_ollama,
+            "name": "Llama 3.2",
+            "provider": "Ollama Local",
+            "available": True,
+        }
+
+    if LLAMA32_CLOUD_FALLBACK and GROQ_API_KEY:
+        return {
+            "call": lambda prompt: call_groq_model(
+                prompt,
+                LLAMA32_CLOUD_MODEL,
+                0.3,
+            ),
+            "name": "GPT-OSS 20B"
+            if LLAMA32_CLOUD_MODEL == "openai/gpt-oss-20b"
+            else LLAMA32_CLOUD_MODEL,
+            "provider": "Groq Cloud · Render fallback",
+            "available": True,
+        }
+
+    return {
+        "call": None,
+        "name": "Llama 3.2",
+        "provider": "Ollama Local",
+        "available": False,
+    }
+
+
+def normalize_prediction_output(text, data, validation, assessment=None, model_id=None):
     """Keep model summaries, but enforce verified classifications and guidance."""
     hr = data.get("heart_rate", 0)
     spo2 = data.get("spo2", 0)
@@ -831,8 +896,25 @@ def normalize_prediction_output(text, data, validation, assessment=None):
     )
 
     original = (text or "").strip()
+    if original:
+        upper = original.upper()
+        if (
+            "PREDICTIONS" in upper
+            and "FOCUS INSIGHT" in upper
+            and "PATIENT GUIDANCE" in upper
+            and "WHEN TO SEEK HELP" in upper
+        ):
+            return original
+
+    model_variant = 0
+    if model_id == "groq_compact":
+        model_variant = 1
+    elif model_id == "ollama":
+        model_variant = 2
+
     overall_match = re.search(
-        r"OVERALL PREDICTION\s*(.*?)(?:\s*PATIENT GUIDANCE|"
+        r"OVERALL PREDICTION\s*(.*?)(?:\s*FOCUS INSIGHT|"
+        r"\s*PATIENT GUIDANCE|"
         r"\s*WHEN TO SEEK HELP|\s*DATASET EVIDENCE|\Z)",
         original,
         flags=re.IGNORECASE | re.DOTALL,
@@ -842,6 +924,42 @@ def normalize_prediction_output(text, data, validation, assessment=None):
         if overall_match and overall_match.group(1).strip()
         else "The available readings were classified using the project monitoring rules."
     )
+
+    if model_variant == 0:
+        abnormal_signals = []
+        if hr <= 0 or hr < 60 or hr > 100:
+            abnormal_signals.append("heart rate")
+        if spo2 <= 0 or spo2 < 95:
+            abnormal_signals.append("SpO2")
+        if temperature < 32 or temperature >= 38:
+            abnormal_signals.append("temperature")
+        if tremor_severity >= 3:
+            abnormal_signals.append("tremor")
+        focus = (
+            "The combined review is driven mainly by "
+            + ", ".join(abnormal_signals)
+            + ", while the remaining signals provide supporting context."
+            if abnormal_signals
+            else "The four signals form a consistent stable pattern without one dominant warning."
+        )
+    elif model_variant == 1:
+        if 0 < spo2 < 95:
+            focus = "Triage priority is to repeat the SpO2 measurement first and confirm whether the low value persists."
+        elif hr <= 0 or hr < 60 or hr > 100:
+            focus = "Triage priority is to repeat the heart-rate measurement after a short period of rest."
+        elif temperature < 32 or temperature >= 38:
+            focus = "Triage priority is to confirm temperature with a reliable thermometer."
+        elif tremor_severity >= 3:
+            focus = "Triage priority is to rest safely and repeat the tremor measurement."
+        else:
+            focus = "Triage priority is continued monitoring because no valid signal currently requires urgent escalation."
+    else:
+        if temperature < 32:
+            focus = "Sensor confidence is limited by the unreliable temperature, while HR, SpO2, and tremor remain usable for dataset comparison."
+        elif hr <= 0 or spo2 <= 0:
+            focus = "Sensor confidence is incomplete because a core vital is missing and should be reacquired before comparison."
+        else:
+            focus = "Sensor confidence is adequate, and the BIDMC and ALAMEDA percentages are statistical context rather than clinical thresholds."
 
     stable_valid_readings = (
         60 <= hr <= 100
@@ -886,26 +1004,31 @@ def normalize_prediction_output(text, data, validation, assessment=None):
             "confusion, weakness, or speech difficulty."
         )
     elif stable_valid_readings:
-        guidance = (
-            "Continue normal hydration, rest as needed, and monitor the trend; "
-            "repeat the temperature because it is not a reliable body reading."
-            if temperature < 32
-            else
-            "Continue normal hydration and routine monitoring of the vital-sign trend."
-        )
-        seek_help = (
-            "Seek professional advice if new symptoms appear or repeated readings "
-            "move outside the project ranges."
-        )
+        guidance_options = [
+            "Continue normal hydration and routine monitoring of the vital-sign trend.",
+            "Keep resting, drink water, and watch the readings over the next few minutes.",
+            "Stay hydrated, rest lightly, and monitor your vital signs carefully."
+        ]
+        seek_help_options = [
+            "Seek professional advice if new symptoms appear or repeated readings move outside the project ranges.",
+            "Ask a healthcare provider if the readings worsen or new symptoms appear.",
+            "Contact medical support if the vital signs change or the condition does not improve."
+        ]
+        guidance = guidance_options[model_variant]
+        seek_help = seek_help_options[model_variant]
     else:
-        guidance = (
-            "Repeat missing or unreliable measurements before drawing a conclusion, "
-            "and continue normal hydration if medically permitted."
-        )
-        seek_help = (
-            "Seek professional advice if symptoms are present or valid repeated "
-            "readings are abnormal."
-        )
+        guidance_options = [
+            "Repeat missing or unreliable measurements before drawing a conclusion, and continue normal hydration if medically permitted.",
+            "Get a second valid reading for any unreliable data, then keep resting and watching how you feel.",
+            "Verify questionable sensor values first, then continue gentle monitoring and hydration."
+        ]
+        seek_help_options = [
+            "Seek professional advice if symptoms are present or valid repeated readings remain unavailable or become abnormal.",
+            "Talk to a clinician if the missing or unreliable values persist or symptoms worsen.",
+            "Reach out for professional advice when the readings remain inconsistent or concerning."
+        ]
+        guidance = guidance_options[model_variant]
+        seek_help = seek_help_options[model_variant]
 
     comparison = (
         validation.get("comparison", {})
@@ -919,17 +1042,45 @@ def normalize_prediction_output(text, data, validation, assessment=None):
         direction = item.get("direction", "unavailable")
         if difference is None:
             return f"unavailable versus {dataset}"
+        magnitude = f"{abs(float(difference)):.1f}%"
+
         if key == "tremor" and abs(float(difference)) > 500:
             return (
-                f"{abs(float(difference)):.1f}% {direction} the {dataset} average, "
+                f"{magnitude} {direction} the {dataset} average, "
                 "but this extreme gap suggests incompatible units or preprocessing"
             )
-        return f"{abs(float(difference)):.1f}% {direction} the {dataset} average"
+
+        templates = [
+            f"{magnitude} {direction} the {dataset} average",
+            f"Compared with {dataset}, it is {magnitude} {direction}",
+            f"The {dataset} average is {magnitude} {direction} the measured value",
+        ]
+
+        if key == "heart_rate":
+            templates = [
+                f"Heart rate is {magnitude} {direction} {dataset} average",
+                f"Compared to {dataset}, heart rate is {magnitude} {direction}",
+                f"The heart rate measures {magnitude} {direction} the {dataset} average",
+            ]
+        elif key == "spo2":
+            templates = [
+                f"SpO2 is {magnitude} {direction} {dataset} average",
+                f"Compared with {dataset}, SpO2 is {magnitude} {direction}",
+                f"The SpO2 reading is {magnitude} {direction} the {dataset} average",
+            ]
+        elif key == "tremor":
+            templates = [
+                f"Tremor is {magnitude} {direction} {dataset} average",
+                f"Compared with {dataset}, tremor is {magnitude} {direction}",
+                f"The tremor measurement is {magnitude} {direction} the {dataset} average",
+            ]
+
+        return templates[model_variant]
 
     dataset_sentence = (
-        f"Heart rate is {comparison_text('heart_rate', 'BIDMC')}; "
-        f"SpO2 is {comparison_text('spo2', 'BIDMC')}; "
-        f"tremor is {comparison_text('tremor', 'ALAMEDA')}. "
+        f"{comparison_text('heart_rate', 'BIDMC')}; "
+        f"{comparison_text('spo2', 'BIDMC')}; "
+        f"{comparison_text('tremor', 'ALAMEDA')}. "
         "These are statistical comparisons, not clinical ranges."
     )
 
@@ -942,6 +1093,8 @@ def normalize_prediction_output(text, data, validation, assessment=None):
         f"— {tremor_label[0]} — {tremor_label[1]}\n"
         "OVERALL PREDICTION\n"
         f"{overall}\n"
+        "FOCUS INSIGHT\n"
+        f"{focus}\n"
         "PATIENT GUIDANCE\n"
         f"{guidance}\n"
         "WHEN TO SEEK HELP\n"
@@ -953,14 +1106,23 @@ def normalize_prediction_output(text, data, validation, assessment=None):
 
 async def run_timed_engine(function, *args):
     started = time.perf_counter()
-    text = await asyncio.to_thread(function, *args)
+    try:
+        text = await asyncio.wait_for(
+            asyncio.to_thread(function, *args),
+            timeout=PREDICTION_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        text = (
+            f"Engine timeout after {PREDICTION_TIMEOUT_SECONDS} seconds. "
+            "Try the analysis again."
+        )
     return {
         "text": text,
         "seconds": round(time.perf_counter() - started, 1),
     }
 
 
-def score_llm_response(text, data, validation):
+def score_llm_response(text, data, validation, model_id=None):
     """Score factual accuracy, safety, completeness, and response quality."""
     lower = (text or "").lower()
     score = 0
@@ -974,6 +1136,7 @@ def score_llm_response(text, data, validation):
     heading_specs = (
         ("predictions", ("predictions",), 3),
         ("overall prediction", ("overall prediction",), 3),
+        ("focus insight", ("focus insight",), 3),
         ("patient guidance", ("patient guidance",), 3),
         ("when to seek help", ("when to seek help",), 3),
         ("dataset evidence", ("dataset evidence",), 3),
@@ -1115,7 +1278,8 @@ def score_llm_response(text, data, validation):
         3,
     )
     overall_match = re.search(
-        r"overall prediction\s*(.*?)(?:\s*patient guidance|"
+        r"overall prediction\s*(.*?)(?:\s*focus insight|"
+        r"\s*patient guidance|"
         r"\s*when to seek help|\s*dataset evidence|\Z)",
         lower,
         flags=re.DOTALL,
@@ -1133,6 +1297,42 @@ def score_llm_response(text, data, validation):
             any(term in overall_text for term in terms),
             1,
         )
+
+    focus_match = re.search(
+        r"focus insight\s*(.*?)(?:\s*patient guidance|"
+        r"\s*when to seek help|\s*dataset evidence|\Z)",
+        lower,
+        flags=re.DOTALL,
+    )
+    focus_text = focus_match.group(1) if focus_match else ""
+    focus_terms = {
+        "groq_large": (
+            "combined",
+            "main",
+            "driven",
+            "pattern",
+            "signal",
+        ),
+        "groq_compact": (
+            "priority",
+            "first",
+            "repeat",
+            "next",
+            "triage",
+        ),
+        "ollama": (
+            "sensor",
+            "reliable",
+            "confidence",
+            "dataset",
+            "measurement",
+        ),
+    }.get(model_id, ())
+    add_check(
+        "model-specific focus",
+        bool(focus_text) and any(term in focus_text for term in focus_terms),
+        3,
+    )
 
     prediction_contradictions = []
     hr_value = data.get("heart_rate", 0)
@@ -1262,7 +1462,7 @@ def score_llm_response(text, data, validation):
         }
     )
 
-    normalized_score = round(max(0, score) / 122 * 100)
+    normalized_score = round(max(0, score) / 128 * 100)
     return {
         "score": min(100, normalized_score),
         "checks": checks,
@@ -1367,11 +1567,21 @@ async def predict(data: dict = None):
             }
 
         assessment = build_monitoring_assessment(clean, validation)
-        prompt = build_prompt(clean, validation, assessment)
+        prompts = {
+            model_id: build_prompt(clean, validation, assessment, model_id)
+            for model_id in ("groq_large", "groq_compact", "ollama")
+        }
+        third_engine = llama32_engine()
 
         if GROQ_API_KEY:
-            groq_large_task = run_timed_engine(call_groq_large, prompt)
-            groq_compact_task = run_timed_engine(call_groq_compact, prompt)
+            groq_large_task = run_timed_engine(
+                call_groq_large,
+                prompts["groq_large"],
+            )
+            groq_compact_task = run_timed_engine(
+                call_groq_compact,
+                prompts["groq_compact"],
+            )
         else:
             missing_groq = {
                 "text": "Groq Cloud is not configured.",
@@ -1390,12 +1600,15 @@ async def predict(data: dict = None):
             groq_large_task,
             groq_compact_task,
             (
-                run_timed_engine(call_ollama, prompt)
-                if OLLAMA_BASE_URL
+                run_timed_engine(third_engine["call"], prompts["ollama"])
+                if third_engine["available"]
                 else asyncio.sleep(
                     0,
                     result={
-                        "text": "Ollama Local is not configured in this environment.",
+                        "text": (
+                            "Llama 3.2 is not configured. Set OLLAMA_BASE_URL, "
+                            "or enable LLAMA32_CLOUD_FALLBACK with GROQ_API_KEY."
+                        ),
                         "seconds": 0,
                     },
                 )
@@ -1412,7 +1625,9 @@ async def predict(data: dict = None):
                     "not_configured"
                     if not GROQ_API_KEY
                     else "error"
-                    if groq_large["text"].lower().startswith("groq error")
+                    if groq_large["text"].lower().startswith(
+                        ("groq error", "engine timeout")
+                    )
                     else "ready"
                 ),
             },
@@ -1425,21 +1640,25 @@ async def predict(data: dict = None):
                     "not_configured"
                     if not GROQ_API_KEY
                     else "error"
-                    if groq_compact["text"].lower().startswith("groq error")
+                    if groq_compact["text"].lower().startswith(
+                        ("groq error", "engine timeout")
+                    )
                     else "ready"
                 ),
             },
             {
                 **ollama_result,
                 "id": "ollama",
-                "name": "Llama 3.2",
-                "provider": "Ollama Local",
+                "name": third_engine["name"],
+                "provider": third_engine["provider"],
                 "status": (
                     "not_configured"
-                    if not OLLAMA_BASE_URL
+                    if not third_engine["available"]
                     else
                     "error"
-                    if ollama_result["text"].lower().startswith("ollama error")
+                    if ollama_result["text"].lower().startswith(
+                        ("ollama error", "groq error", "engine timeout")
+                    )
                     else "ready"
                 ),
             },
@@ -1448,7 +1667,12 @@ async def predict(data: dict = None):
         for model in models:
             raw_text = model["text"]
             quality = (
-                score_llm_response(raw_text, clean, validation)
+                score_llm_response(
+                    raw_text,
+                    clean,
+                    validation,
+                    model["id"],
+                )
                 if model["status"] == "ready"
                 else {"score": 0, "checks": []}
             )
@@ -1459,6 +1683,7 @@ async def predict(data: dict = None):
                     clean,
                     validation,
                     assessment,
+                    model["id"],
                 )
 
         ready_models = [model for model in models if model["status"] == "ready"]

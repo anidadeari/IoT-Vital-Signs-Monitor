@@ -410,7 +410,7 @@ tr:hover td{background:rgba(255,255,255,.025);}
 
   <div class="action-row">
     <button class="btn grad" onclick="runValidation()">↻ Run Dataset Comparison</button>
-    <button class="btn" onclick="loadStats()">↻ Refresh Stats</button>
+    <button class="btn" onclick="loadStats(true)">↻ Refresh Stats</button>
     <span id="valStatus" style="font-size:12px;color:var(--muted);font-family:var(--mono);"></span>
   </div>
 
@@ -442,7 +442,7 @@ tr:hover td{background:rgba(255,255,255,.025);}
 
   <div class="val-grid">
     <div class="compare-chart-wrap">
-      <div class="panel-title" style="margin-bottom:16px;">📊 Live ESP32 Data vs Dataset Average (reference = 100%)</div>
+      <div class="panel-title" style="margin-bottom:16px;">📊 ESP32 values vs dataset reference — color shows vital status</div>
       <div style="position:relative;width:100%;height:260px;">
         <canvas id="compareChart" role="img" aria-label="Bar chart comparing sensor readings with dataset reference values.">Sensor vs dataset reference comparison.</canvas>
       </div>
@@ -543,6 +543,7 @@ tr:hover td{background:rgba(255,255,255,.025);}
     <span>📡 Latest ESP32 snapshot</span>
     <span>📊 BIDMC + ALAMEDA CSV context</span>
     <span>🛡️ Safety rules applied before AI</span>
+    <span>ℹ️ Quality score is not a medical probability</span>
   </div>
 
   <div class="model-loading" id="modelLoading">
@@ -557,21 +558,21 @@ tr:hover td{background:rgba(255,255,255,.025);}
     <div class="lc" id="lc1" style="--la:#ff6b35;--lb:#ff2d78">
       <div class="lc-tag">🦙 GROQ CLOUD</div>
       <h4>Llama 3.3 70B</h4>
-      <div class="lc-sub">large cloud model · vital classification</div>
+      <div class="lc-sub">comprehensive review · combined risk pattern</div>
       <div class="lc-body" id="l1">Press Run AI Analysis to begin.</div>
       <div class="lc-meta"><span class="lc-risk s-off" id="r1">---</span><span class="lc-time" id="t1"></span></div>
     </div>
     <div class="lc" id="lc2" style="--la:#00c896;--lb:#00b4f0">
       <div class="lc-tag">🦙 GROQ CLOUD</div>
       <h4>Llama 3.1 8B Instant</h4>
-      <div class="lc-sub">compact cloud model · fast classification</div>
+      <div class="lc-sub">rapid triage · immediate next priority</div>
       <div class="lc-body" id="l2">Press Run AI Analysis to begin.</div>
       <div class="lc-meta"><span class="lc-risk s-off" id="r2">---</span><span class="lc-time" id="t2"></span></div>
     </div>
     <div class="lc" id="lc3" style="--la:#9f2dff;--lb:#e040fb">
-      <div class="lc-tag">💻 OLLAMA LOCAL</div>
-      <h4>Llama 3.2</h4>
-      <div class="lc-sub">local model · independent classification</div>
+      <div class="lc-tag" id="provider3">💻 OLLAMA LOCAL</div>
+      <h4 id="modelName3">Llama 3.2</h4>
+      <div class="lc-sub" id="modelSub3">sensor quality · dataset confidence</div>
       <div class="lc-body" id="l3">Press Run AI Analysis to begin.</div>
       <div class="lc-meta"><span class="lc-risk s-off" id="r3">---</span><span class="lc-time" id="t3"></span></div>
     </div>
@@ -602,7 +603,6 @@ let compareChartInst = null;
 let lastFreshReadingAt = 0;
 let lastReadingKey = '';
 let lastStatsRefreshAt = 0;
-let datasetRefreshTimer = null;
 const LIVE_TIMEOUT_MS = 25000;
 
 // ───── NAVIGATION ─────
@@ -612,7 +612,7 @@ function goTo(name, btn) {
   document.getElementById('page-' + name).classList.add('active');
   btn.classList.add('active');
   if (name === 'history') loadHistory();
-  if (name === 'validation') { runValidation(); loadStats(); }
+  if (name === 'validation') loadStats();
   if (name === 'prediction') loadAssessment();
 }
 
@@ -864,10 +864,6 @@ function readingAgeMs(d) {
   return Number.isFinite(parsed) ? Math.max(0, Date.now() - parsed) : Infinity;
 }
 
-function validationPageIsOpen() {
-  return document.getElementById('page-validation').classList.contains('active');
-}
-
 function refreshLivePanels() {
   const now = Date.now();
   if (now - lastStatsRefreshAt >= 2000) {
@@ -875,10 +871,6 @@ function refreshLivePanels() {
     loadStats();
   }
 
-  if (validationPageIsOpen()) {
-    clearTimeout(datasetRefreshTimer);
-    datasetRefreshTimer = setTimeout(runValidation, 250);
-  }
 }
 
 function handleReading(d, source = 'websocket') {
@@ -939,17 +931,29 @@ async function loadLatest(silent = false) {
   }
 }
 
-async function loadStats() {
+async function loadStats(showStatus = false) {
+  const status = document.getElementById('valStatus');
+  if (showStatus && status) status.textContent = 'Refreshing stats...';
+
   try {
     const s = await fetch(API_BASE + '/api/statistics', {
       cache: 'no-store'
     }).then(r => r.json());
-    if (s.status !== 'ok') return;
+    if (s.status !== 'ok') {
+      if (showStatus && status) status.textContent = 'Stats unavailable';
+      return;
+    }
     document.getElementById('avgHr').textContent = s.averages.heart_rate ? s.averages.heart_rate + ' bpm' : '--';
     document.getElementById('avgSp').textContent = s.averages.spo2 ? s.averages.spo2 + '%' : '--';
     document.getElementById('avgTp').textContent = s.averages.temperature ? s.averages.temperature + '°C' : '--';
     document.getElementById('avgTr').textContent = s.averages.tremor_amplitude || '--';
-  } catch (e) { console.error('loadStats:', e); }
+    if (showStatus && status) {
+      status.textContent = 'Stats refreshed ' + new Date().toLocaleTimeString();
+    }
+  } catch (e) {
+    console.error('loadStats:', e);
+    if (showStatus && status) status.textContent = 'Stats refresh failed';
+  }
 }
 
 // ───── DATASET VALIDATION ─────
@@ -1080,22 +1084,65 @@ function buildDatasetConclusion(sensor, results) {
 function buildCompareChart(s, b, a) {
   if (compareChartInst) compareChartInst.destroy();
   const ctx = document.getElementById('compareChart');
+  const hr = Number(s.heart_rate || 0);
+  const spo2 = Number(s.spo2 || 0);
+  const tremor = Number(s.tremor_amplitude || 0);
+  const severity = Number(s.tremor_severity || 0);
+  const hrStatus = hr <= 0 ? 'NO READING'
+    : hr < 50 || hr > 120 ? 'CRITICAL'
+    : hr < 60 || hr > 100 ? 'WARNING' : 'NORMAL';
+  const spo2Status = spo2 <= 0 ? 'NO READING'
+    : spo2 < 90 ? 'CRITICAL'
+    : spo2 < 95 ? 'LOW' : 'NORMAL';
+  const tremorStatus = severity >= 3 ? 'CRITICAL'
+    : severity > 0 ? 'WARNING' : 'NORMAL';
+  const statusColor = status => status === 'CRITICAL'
+    ? 'rgba(239,68,68,.78)'
+    : status === 'WARNING' || status === 'LOW'
+      ? 'rgba(245,158,11,.78)'
+      : status === 'NORMAL'
+        ? 'rgba(16,217,160,.72)'
+        : 'rgba(107,125,179,.65)';
+  const liveLabels = [
+    `HR ${hr || '--'} bpm - ${hrStatus}`,
+    `SpO2 ${spo2 || '--'}% - ${spo2Status}`,
+    `Tremor ${tremor.toFixed(3)} - ${tremorStatus}`
+  ];
+
   compareChartInst = new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: ['HR — BIDMC', 'SpO₂ — BIDMC', 'Tremor — ALAMEDA'],
+      labels: liveLabels,
       datasets: [
-        { label: 'Live ESP32 data as % of reference average', data: [
+        { label: 'ESP32/reference ratio - color indicates vital status', data: [
           b.hr_average ? (s.heart_rate / b.hr_average) * 100 : 0,
           b.spo2_average ? (s.spo2 / b.spo2_average) * 100 : 0,
           a.tremor_magnitude_average ? (s.tremor_amplitude / a.tremor_magnitude_average) * 100 : 0
-        ], backgroundColor: 'rgba(255,45,120,.6)', borderColor: '#ff2d78', borderWidth: 1.5, borderRadius: 6 },
+        ], backgroundColor: [
+          statusColor(hrStatus),
+          statusColor(spo2Status),
+          statusColor(tremorStatus)
+        ], borderColor: [
+          statusColor(hrStatus),
+          statusColor(spo2Status),
+          statusColor(tremorStatus)
+        ], borderWidth: 1.5, borderRadius: 6 },
         { label: 'Reference dataset average (100%)', data: [100, 100, 100], backgroundColor: 'rgba(0,180,240,.5)', borderColor: '#00b4f0', borderWidth: 1.5, borderRadius: 6 }
       ]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { labels: { color: '#9aabd4', font: { family: 'Outfit', size: 12 }, boxWidth: 12, borderRadius: 4 } } },
+      plugins: {
+        legend: { labels: { color: '#9aabd4', font: { family: 'Outfit', size: 12 }, boxWidth: 12, borderRadius: 4 } },
+        tooltip: {
+          callbacks: {
+            title: items => liveLabels[items[0].dataIndex],
+            label: context => context.datasetIndex === 0
+              ? `${Number(context.raw).toFixed(1)}% of dataset average`
+              : 'Dataset reference average: 100%'
+          }
+        }
+      },
       scales: {
         y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,.04)' }, ticks: { callback: v => v + '%', color: '#6b7db3', font: { family: 'JetBrains Mono', size: 10 } } },
         x: { grid: { display: false }, ticks: { color: '#9aabd4', font: { size: 11 } } }
@@ -1105,6 +1152,78 @@ function buildCompareChart(s, b, a) {
 }
 
 // ───── HISTORY ─────
+function historyStatus(r) {
+  const heartRate = Number(r.heart_rate || 0);
+  const spo2 = Number(r.spo2 || 0);
+  const temperature = Number(r.temperature || 0);
+  const tremor = Number(r.tremor_severity || 0);
+
+  const critical =
+    (heartRate > 0 && (heartRate < 50 || heartRate > 120))
+    || (spo2 > 0 && spo2 < 90)
+    || temperature >= 39.4
+    || tremor >= 3;
+
+  if (critical) return { text: 'URGENT ATTENTION', css: 's-crit' };
+
+  const warning =
+    (heartRate > 0 && (heartRate < 60 || heartRate > 100))
+    || (spo2 > 0 && spo2 < 95)
+    || (temperature > 0 && temperature < 35)
+    || temperature >= 38
+    || tremor > 0;
+
+  if (warning) return { text: 'ATTENTION NEEDED', css: 's-warn' };
+
+  const hasNoVitalData =
+    heartRate <= 0
+    && spo2 <= 0
+    && temperature <= 0
+    && tremor <= 0;
+
+  if (hasNoVitalData) return { text: 'NO DATA', css: 's-off' };
+
+  return { text: 'STABLE', css: 's-ok' };
+}
+
+function historyHeartRate(r) {
+  const value = Number(r.heart_rate || 0);
+  if (value <= 0) return '-- · NO READING';
+  if (value < 50) return `${value} · VERY LOW`;
+  if (value < 60) return `${value} · LOW`;
+  if (value <= 100) return `${value} · NORMAL`;
+  if (value <= 120) return `${value} · HIGH`;
+  return `${value} · VERY HIGH`;
+}
+
+function historySpo2(r) {
+  const value = Number(r.spo2 || 0);
+  if (value <= 0) return '-- · NO READING';
+  if (value < 90) return `${value} · CRITICAL`;
+  if (value < 95) return `${value} · LOW`;
+  return `${value} · NORMAL`;
+}
+
+function historyTemperature(r) {
+  const value = Number(r.temperature || 0);
+  if (value <= 0) return '-- · NO READING';
+  const shown = value.toFixed(1);
+  if (value < 35) return `${shown} · CHECK CONTACT`;
+  if (value <= 37.5) return `${shown} · NORMAL`;
+  if (value < 38) return `${shown} · ELEVATED`;
+  if (value < 39.4) return `${shown} · FEVER`;
+  return `${shown} · HIGH FEVER`;
+}
+
+function historyTremor(r) {
+  const severity = Math.max(
+    0,
+    Math.min(4, Number(r.tremor_severity || 0))
+  );
+  const labels = ['NO TREMOR', 'SLIGHT', 'MODERATE', 'MARKED', 'SEVERE'];
+  return `${severity}/4 · ${labels[severity]}`;
+}
+
 async function loadHistory() {
   const b = document.getElementById('histBody');
   b.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px">Loading…</td></tr>';
@@ -1113,15 +1232,15 @@ async function loadHistory() {
     if (!rows.length) { b.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px">No data yet</td></tr>'; return; }
     document.getElementById('histInfo').textContent = rows.length + ' records loaded';
     b.innerHTML = rows.map(r => {
-      const c = r.cardiac_status === 'NORMAL' ? 's-ok' : r.cardiac_status === '---' ? 's-off' : 's-crit';
+      const status = historyStatus(r);
       return `<tr>
         <td>${esc(r.id)}</td>
         <td>${esc(r.timestamp)}</td>
-        <td>${esc(r.heart_rate || '--')}</td>
-        <td>${esc(r.spo2 || '--')}</td>
-        <td>${r.temperature ? (+r.temperature).toFixed(1) : '--'}</td>
+        <td>${esc(historyHeartRate(r))}</td>
+        <td>${esc(historySpo2(r))}</td>
+        <td>${esc(historyTemperature(r))}</td>
         <td>${esc(r.tremor_severity)}/4 · ${esc(r.tremor_status)}</td>
-        <td><span class="pill ${c}">${esc(r.cardiac_status)}</span></td>
+        <td><span class="pill ${status.css}">${esc(status.text)}</span></td>
       </tr>`;
     }).join('');
   } catch (e) {
@@ -1266,6 +1385,16 @@ async function runAI() {
     const models = Object.fromEntries((d.models || []).map(model => [model.id, model]));
     setAIResult('l1', 'lc1', 'r1', 't1', models.groq_large);
     setAIResult('l2', 'lc2', 'r2', 't2', models.groq_compact);
+    if (models.ollama) {
+      document.getElementById('provider3').textContent =
+        (models.ollama.provider || 'Ollama Local').toUpperCase();
+      document.getElementById('modelName3').textContent =
+        models.ollama.name || 'Llama 3.2';
+      document.getElementById('modelSub3').textContent =
+        models.ollama.provider?.includes('fallback')
+          ? 'cloud fallback · sensor quality and dataset confidence'
+          : 'local model · sensor quality and dataset confidence';
+    }
     setAIResult('l3', 'lc3', 'r3', 't3', models.ollama);
     renderWinner(d.winner);
     document.getElementById('smsPreview').innerHTML =
@@ -1314,7 +1443,7 @@ function formatAIText(text) {
     const line = rawLine.trim();
     if (!line) return '';
     const safe = esc(line);
-    if (/^\d+\.\s/.test(line) || /^(PREDICTIONS|OVERALL PREDICTION|PATIENT GUIDANCE|WHEN TO SEEK HELP|DATASET EVIDENCE)$/i.test(line)) {
+    if (/^\d+\.\s/.test(line) || /^(PREDICTIONS|OVERALL PREDICTION|FOCUS INSIGHT|PATIENT GUIDANCE|WHEN TO SEEK HELP|DATASET EVIDENCE)$/i.test(line)) {
       return `<div class="ai-section-title">${safe}</div>`;
     }
     if (/^(Heart Rate|SpO2|Temperature|Tremor)(\s+vs\s+[^:]+)?:/i.test(line)) {
@@ -1343,7 +1472,7 @@ function setAIResult(bodyId, cardId, riskId, timeId, result) {
 
   if (status === 'ready') {
     const score = result?.score ?? 0;
-    riskEl.textContent = 'Quality ' + score + '/100' + (score < 65 ? ' · review' : '');
+    riskEl.textContent = 'Response quality ' + score + '/100' + (score < 65 ? ' · review' : '');
     riskEl.className = 'lc-risk ' + (score >= 75 ? 's-ok' : score >= 65 ? 's-info' : 's-warn');
   } else if (status === 'not_configured') {
     riskEl.textContent = 'OPTIONAL';
