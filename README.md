@@ -219,6 +219,8 @@ uvicorn main:app --host 0.0.0.0 --port $PORT
 
 The `GROQ_API_KEY` is configured as an environment variable on Render and is not stored in the repository. Because a local Ollama process is not available inside this Render web service, `LLAMA32_CLOUD_FALLBACK=true` uses `openai/gpt-oss-20b` for the third comparison card. Render ignores a stale `OLLAMA_BASE_URL`, and `PREDICTION_TIMEOUT_SECONDS=30` prevents one unavailable model from delaying the complete comparison for several minutes. The dashboard shows the actual model and provider instead of labeling the fallback as Llama 3.2.
 
+Local Ollama uses a separate `OLLAMA_TIMEOUT_SECONDS=150` default so the first model load is not incorrectly marked offline. This longer timeout is local-only and does not slow the Render fallback.
+
 I used Render's free plan for this capstone prototype. Because the service can become inactive after a period without traffic, the first request may take longer while the server starts again. For this reason, the ESP32 sends local updates more frequently and cloud updates less frequently.
 
 ## Configuring the ESP32

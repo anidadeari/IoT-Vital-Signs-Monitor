@@ -98,6 +98,9 @@ OLLAMA_BASE_URL = os.getenv(
 PREDICTION_TIMEOUT_SECONDS = int(
     os.getenv("PREDICTION_TIMEOUT_SECONDS", "30")
 )
+OLLAMA_TIMEOUT_SECONDS = int(
+    os.getenv("OLLAMA_TIMEOUT_SECONDS", "150")
+)
 LLAMA32_CLOUD_FALLBACK = os.getenv(
     "LLAMA32_CLOUD_FALLBACK",
     "true" if IS_RENDER else "false",
@@ -807,7 +810,7 @@ def call_ollama(prompt):
                     "repeat_penalty": 1.1,
                 },
             },
-            timeout=(5, 45),
+            timeout=(5, max(45, OLLAMA_TIMEOUT_SECONDS - 5)),
         )
 
         if response.status_code != 200:
@@ -830,6 +833,7 @@ def llama32_engine():
             "name": "Llama 3.2",
             "provider": "Ollama Local",
             "available": True,
+            "timeout": OLLAMA_TIMEOUT_SECONDS,
         }
 
     if LLAMA32_CLOUD_FALLBACK and GROQ_API_KEY:
@@ -844,6 +848,7 @@ def llama32_engine():
             else LLAMA32_CLOUD_MODEL,
             "provider": "Groq Cloud · Render fallback",
             "available": True,
+            "timeout": PREDICTION_TIMEOUT_SECONDS,
         }
 
     return {
@@ -851,6 +856,7 @@ def llama32_engine():
         "name": "Llama 3.2",
         "provider": "Ollama Local",
         "available": False,
+        "timeout": PREDICTION_TIMEOUT_SECONDS,
     }
 
 
@@ -1104,16 +1110,17 @@ def normalize_prediction_output(text, data, validation, assessment=None, model_i
     )
 
 
-async def run_timed_engine(function, *args):
+async def run_timed_engine(function, *args, timeout_seconds=None):
     started = time.perf_counter()
+    timeout_seconds = timeout_seconds or PREDICTION_TIMEOUT_SECONDS
     try:
         text = await asyncio.wait_for(
             asyncio.to_thread(function, *args),
-            timeout=PREDICTION_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
         )
     except asyncio.TimeoutError:
         text = (
-            f"Engine timeout after {PREDICTION_TIMEOUT_SECONDS} seconds. "
+            f"Engine timeout after {timeout_seconds} seconds. "
             "Try the analysis again."
         )
     return {
@@ -1600,7 +1607,11 @@ async def predict(data: dict = None):
             groq_large_task,
             groq_compact_task,
             (
-                run_timed_engine(third_engine["call"], prompts["ollama"])
+                run_timed_engine(
+                    third_engine["call"],
+                    prompts["ollama"],
+                    timeout_seconds=third_engine["timeout"],
+                )
                 if third_engine["available"]
                 else asyncio.sleep(
                     0,
@@ -1666,24 +1677,31 @@ async def predict(data: dict = None):
 
         for model in models:
             raw_text = model["text"]
-            quality = (
-                score_llm_response(
-                    raw_text,
-                    clean,
-                    validation,
-                    model["id"],
-                )
-                if model["status"] == "ready"
-                else {"score": 0, "checks": []}
-            )
-            model.update(quality)
             if model["status"] == "ready":
-                model["text"] = normalize_prediction_output(
+                displayed_text = normalize_prediction_output(
                     raw_text,
                     clean,
                     validation,
                     assessment,
                     model["id"],
+                )
+                model["text"] = displayed_text
+                model.update(
+                    score_llm_response(
+                        displayed_text,
+                        clean,
+                        validation,
+                        model["id"],
+                    )
+                )
+            else:
+                model.update(
+                    {
+                        "score": 0,
+                        "checks": [],
+                        "word_count": 0,
+                        "passed_checks": 0,
+                    }
                 )
 
         ready_models = [model for model in models if model["status"] == "ready"]
