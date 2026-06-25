@@ -722,6 +722,11 @@ Tremor {tremor_amplitude} m/s², {tremor_frequency} Hz, severity {tremor_severit
 {findings.get('Tremor', 'unavailable')}.
 Dataset: HR {comparison_line('heart_rate', 'BIDMC')}; SpO2
 {comparison_line('spo2', 'BIDMC')}; tremor {comparison_line('tremor', 'ALAMEDA')}.
+Verified heart-rate care: {care.get('heart_rate', 'Continue monitoring.')}
+Verified SpO2 care: {care.get('spo2', 'Continue monitoring.')}
+Verified temperature care: {care.get('temperature', 'Continue monitoring.')}
+Verified tremor care: {care.get('tremor', 'Continue monitoring.')}
+Verified warning signs: {' '.join(urgent) if urgent else 'Seek help if concerning symptoms appear.'}
 Output exactly:
 PREDICTIONS
 Heart Rate: {heart_rate} bpm — {hr_prediction[0]} — {hr_prediction[1]}
@@ -902,15 +907,6 @@ def normalize_prediction_output(text, data, validation, assessment=None, model_i
     )
 
     original = (text or "").strip()
-    if original:
-        upper = original.upper()
-        if (
-            "PREDICTIONS" in upper
-            and "FOCUS INSIGHT" in upper
-            and "PATIENT GUIDANCE" in upper
-            and "WHEN TO SEEK HELP" in upper
-        ):
-            return original
 
     model_variant = 0
     if model_id == "groq_compact":
@@ -967,28 +963,70 @@ def normalize_prediction_output(text, data, validation, assessment=None, model_i
         else:
             focus = "Sensor confidence is adequate, and the BIDMC and ALAMEDA percentages are statistical context rather than clinical thresholds."
 
-    stable_valid_readings = (
-        60 <= hr <= 100
-        and spo2 >= 95
-        and tremor_severity < 3
+    care = (
+        assessment.get("care_by_vital", {})
+        if isinstance(assessment, dict)
+        else {}
     )
+    urgent_signs = (
+        assessment.get("urgent_signs", [])
+        if isinstance(assessment, dict)
+        else []
+    )
+
     if spo2 > 0 and spo2 < 90:
-        guidance = (
-            "Stop activity, sit upright, remain calm, and repeat the SpO2 reading "
-            "immediately while keeping the hand warm and still."
+        guidance = care.get(
+            "spo2",
+            "Stop activity, sit upright, remain calm, warm the hand, and repeat the SpO2 reading immediately.",
         )
         seek_help = (
             "Seek emergency help if the repeated SpO2 remains below 90% or there "
             "is breathing difficulty, blue or grey lips, confusion, or severe weakness."
         )
     elif temperature >= 39.4 or (32 <= temperature < 35):
-        guidance = (
-            "Rest in a safe place and confirm the temperature with a reliable "
-            "thermometer before making decisions."
+        guidance = care.get(
+            "temperature",
+            "Rest in a safe place and confirm the temperature with a reliable thermometer.",
         )
         seek_help = (
             "Seek urgent medical help if a reliable thermometer confirms this "
             "critical temperature or concerning symptoms are present."
+        )
+    elif hr > 100:
+        guidance = care.get(
+            "heart_rate",
+            "Sit quietly, rest for 5–10 minutes, drink water if normally allowed, avoid caffeine and strenuous activity, then repeat the pulse.",
+        )
+        seek_help = (
+            "Contact a healthcare professional if the pulse remains high at rest; "
+            "seek emergency help for chest pain, breathing difficulty, fainting, or severe dizziness."
+        )
+    elif hr < 60 and hr > 0:
+        guidance = care.get(
+            "heart_rate",
+            "Sit or lie down if dizzy, rest, avoid standing suddenly, and repeat the pulse after several minutes.",
+        )
+        seek_help = (
+            "Seek urgent help if the slow pulse occurs with fainting, chest pain, "
+            "breathing difficulty, confusion, or marked weakness."
+        )
+    elif 0 < spo2 < 95:
+        guidance = care.get(
+            "spo2",
+            "Rest seated, breathe normally, warm the hand, verify finger placement, and repeat SpO2 after a few minutes.",
+        )
+        seek_help = (
+            "Contact a healthcare professional if repeated SpO2 readings remain low "
+            "or symptoms such as breathing difficulty are present."
+        )
+    elif temperature < 32:
+        guidance = care.get(
+            "temperature",
+            "Position the temperature sensor firmly, insulate it from room air, wait, and repeat the measurement.",
+        )
+        seek_help = (
+            "Use a reliable thermometer; seek emergency help if it confirms a body "
+            "temperature below 35°C or concerning symptoms are present."
         )
     elif hr <= 0 or spo2 <= 0:
         guidance = (
@@ -999,17 +1037,25 @@ def normalize_prediction_output(text, data, validation, assessment=None, model_i
             "Seek professional advice if symptoms are present or valid repeated "
             "measurements remain unavailable or become abnormal."
         )
-    elif hr > 100 or hr < 60 or (0 < spo2 < 95) or tremor_severity >= 3:
-        guidance = (
-            "Rest, drink water if normally allowed, avoid strenuous activity, "
-            "and repeat the abnormal readings after several minutes."
+    elif temperature >= 38:
+        guidance = care.get(
+            "temperature",
+            "Rest, drink fluids, wear light clothing, keep the room comfortable, and repeat the temperature.",
         )
         seek_help = (
-            "Contact a healthcare professional if abnormal readings persist; "
-            "seek emergency help for chest pain, fainting, breathing difficulty, "
-            "confusion, weakness, or speech difficulty."
+            "Contact a healthcare professional if fever persists, rises, or occurs "
+            "with concerning symptoms."
         )
-    elif stable_valid_readings:
+    elif tremor_severity >= 3:
+        guidance = care.get(
+            "tremor",
+            "Sit safely, support the arm, breathe slowly, avoid caffeine, and repeat the tremor measurement.",
+        )
+        seek_help = (
+            "Seek urgent help for sudden tremor with weakness, facial droop, speech "
+            "difficulty, confusion, or loss of balance."
+        )
+    elif 60 <= hr <= 100 and spo2 >= 95 and temperature >= 32:
         guidance_options = [
             "Continue normal hydration and routine monitoring of the vital-sign trend.",
             "Keep resting, drink water, and watch the readings over the next few minutes.",
@@ -1023,18 +1069,16 @@ def normalize_prediction_output(text, data, validation, assessment=None, model_i
         guidance = guidance_options[model_variant]
         seek_help = seek_help_options[model_variant]
     else:
-        guidance_options = [
-            "Repeat missing or unreliable measurements before drawing a conclusion, and continue normal hydration if medically permitted.",
-            "Get a second valid reading for any unreliable data, then keep resting and watching how you feel.",
-            "Verify questionable sensor values first, then continue gentle monitoring and hydration."
-        ]
-        seek_help_options = [
-            "Seek professional advice if symptoms are present or valid repeated readings remain unavailable or become abnormal.",
-            "Talk to a clinician if the missing or unreliable values persist or symptoms worsen.",
-            "Reach out for professional advice when the readings remain inconsistent or concerning."
-        ]
-        guidance = guidance_options[model_variant]
-        seek_help = seek_help_options[model_variant]
+        guidance = (
+            next(iter(care.values()))
+            if care
+            else "Repeat questionable measurements, rest, and continue normal hydration if permitted."
+        )
+        seek_help = (
+            urgent_signs[0]
+            if urgent_signs
+            else "Seek professional advice if symptoms appear or repeated readings remain abnormal."
+        )
 
     comparison = (
         validation.get("comparison", {})
